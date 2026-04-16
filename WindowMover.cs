@@ -10,16 +10,34 @@ internal sealed class WindowMover
     private const int DwmaCloaked = 14;
     private readonly int _currentProcessId = Environment.ProcessId;
 
-    public int MoveActiveWindowBetweenMonitors()
+    public int MoveActiveWindowBetweenMonitors(IntPtr preferredHandle = default, IntPtr swapHandle = default)
     {
         var screens = GetTwoScreens();
-        var handle = GetPreferredWindowHandle();
-        if (handle == IntPtr.Zero)
+        var activeHandle = GetPreferredWindowHandle(preferredHandle, allowEnumerationFallback: false, requireNonMinimized: true);
+        if (activeHandle == IntPtr.Zero)
         {
-            throw new InvalidOperationException("Не удалось определить активное окно для переноса.");
+            throw new InvalidOperationException("Не удалось определить открытое активное окно для обмена.");
         }
 
-        return MoveSingleWindow(handle, screens, restoreFocus: true) ? 1 : 0;
+        if (TrySwapWindows(activeHandle, swapHandle, screens))
+        {
+            return 2;
+        }
+
+        throw new InvalidOperationException("На другом мониторе нет подходящего открытого окна для обмена.");
+    }
+
+    public bool TryGetMovableForegroundWindow(out TrackedWindow trackedWindow)
+    {
+        var handle = NativeMethods.GetForegroundWindow();
+        if (TryGetWindowSnapshot(handle, out var snapshot))
+        {
+            trackedWindow = new TrackedWindow(snapshot.Handle, snapshot.Screen.DeviceName);
+            return true;
+        }
+
+        trackedWindow = default;
+        return false;
     }
 
     public int MoveAllWindowsBetweenMonitors()
@@ -55,18 +73,28 @@ internal sealed class WindowMover
         return screens;
     }
 
-    private IntPtr GetPreferredWindowHandle()
+    private IntPtr GetPreferredWindowHandle(IntPtr preferredHandle, bool allowEnumerationFallback, bool requireNonMinimized)
     {
+        if (ShouldMoveWindow(preferredHandle) && (!requireNonMinimized || !IsMinimized(preferredHandle)))
+        {
+            return preferredHandle;
+        }
+
         var foregroundWindow = NativeMethods.GetForegroundWindow();
-        if (ShouldMoveWindow(foregroundWindow))
+        if (ShouldMoveWindow(foregroundWindow) && (!requireNonMinimized || !IsMinimized(foregroundWindow)))
         {
             return foregroundWindow;
+        }
+
+        if (!allowEnumerationFallback)
+        {
+            return IntPtr.Zero;
         }
 
         var fallback = IntPtr.Zero;
         NativeMethods.EnumWindows((handle, _) =>
         {
-            if (!ShouldMoveWindow(handle))
+            if (!ShouldMoveWindow(handle) || (requireNonMinimized && IsMinimized(handle)))
             {
                 return true;
             }
@@ -80,52 +108,80 @@ internal sealed class WindowMover
 
     private bool MoveSingleWindow(IntPtr handle, Screen[] screens, bool restoreFocus)
     {
-        if (!ShouldMoveWindow(handle))
+        if (!TryGetWindowSnapshot(handle, out var snapshot))
         {
             return false;
         }
 
-        if (!NativeMethods.GetWindowPlacement(handle, out var placement))
+        if (screens.All(screen => screen.DeviceName != snapshot.Screen.DeviceName))
         {
             return false;
         }
 
-        var normalBounds = placement.rcNormalPosition.ToRectangle();
-        if (normalBounds.Width <= 0 || normalBounds.Height <= 0)
+        var targetScreen = screens[0].DeviceName == snapshot.Screen.DeviceName ? screens[1] : screens[0];
+        var targetBounds = MapBounds(snapshot.NormalBounds, snapshot.Screen.WorkingArea, targetScreen.WorkingArea);
+
+        if (!ApplyPlacement(snapshot.Handle, snapshot.Placement, targetBounds))
         {
             return false;
-        }
-
-        var currentScreen = Screen.FromRectangle(normalBounds);
-        if (screens.All(screen => screen.DeviceName != currentScreen.DeviceName))
-        {
-            return false;
-        }
-
-        var targetScreen = screens[0].DeviceName == currentScreen.DeviceName ? screens[1] : screens[0];
-        var targetBounds = MapBounds(normalBounds, currentScreen.WorkingArea, targetScreen.WorkingArea);
-
-        placement.length = Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
-        placement.flags = 0;
-        placement.rcNormalPosition = NativeMethods.RECT.FromRectangle(targetBounds);
-
-        if (!NativeMethods.SetWindowPlacement(handle, ref placement))
-        {
-            return false;
-        }
-
-        if (placement.showCmd == NativeMethods.ShowWindowCommand.Maximize)
-        {
-            NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Restore);
-            NativeMethods.SetWindowPlacement(handle, ref placement);
-            NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Maximize);
         }
 
         if (restoreFocus)
         {
-            NativeMethods.SetForegroundWindow(handle);
+            NativeMethods.SetForegroundWindow(snapshot.Handle);
         }
 
+        return true;
+    }
+
+    private bool TrySwapWindows(IntPtr activeHandle, IntPtr swapHandle, Screen[] screens)
+    {
+        if (!TryGetWindowSnapshot(activeHandle, out var activeSnapshot, requireNonMinimized: true))
+        {
+            return false;
+        }
+
+        if (!TryGetWindowSnapshot(swapHandle, out var swapSnapshot, requireNonMinimized: true))
+        {
+            return false;
+        }
+
+        if (activeSnapshot.Handle == swapSnapshot.Handle)
+        {
+            return false;
+        }
+
+        if (activeSnapshot.Screen.DeviceName == swapSnapshot.Screen.DeviceName)
+        {
+            return false;
+        }
+
+        if (screens.All(screen => screen.DeviceName != activeSnapshot.Screen.DeviceName)
+            || screens.All(screen => screen.DeviceName != swapSnapshot.Screen.DeviceName))
+        {
+            return false;
+        }
+
+        var activeTargetBounds = MapBounds(
+            activeSnapshot.NormalBounds,
+            activeSnapshot.Screen.WorkingArea,
+            swapSnapshot.Screen.WorkingArea);
+        var swapTargetBounds = MapBounds(
+            swapSnapshot.NormalBounds,
+            swapSnapshot.Screen.WorkingArea,
+            activeSnapshot.Screen.WorkingArea);
+
+        if (!ApplyPlacement(swapSnapshot.Handle, swapSnapshot.Placement, swapTargetBounds))
+        {
+            return false;
+        }
+
+        if (!ApplyPlacement(activeSnapshot.Handle, activeSnapshot.Placement, activeTargetBounds))
+        {
+            return false;
+        }
+
+        NativeMethods.SetForegroundWindow(activeSnapshot.Handle);
         return true;
     }
 
@@ -178,6 +234,64 @@ internal sealed class WindowMover
         return true;
     }
 
+    private bool TryGetWindowSnapshot(IntPtr handle, out WindowSnapshot snapshot, bool requireNonMinimized = false)
+    {
+        snapshot = default;
+
+        if (!ShouldMoveWindow(handle))
+        {
+            return false;
+        }
+
+        if (!NativeMethods.GetWindowPlacement(handle, out var placement))
+        {
+            return false;
+        }
+
+        if (requireNonMinimized && placement.showCmd == NativeMethods.ShowWindowCommand.Minimize)
+        {
+            return false;
+        }
+
+        var normalBounds = placement.rcNormalPosition.ToRectangle();
+        if (normalBounds.Width <= 0 || normalBounds.Height <= 0)
+        {
+            return false;
+        }
+
+        var screen = Screen.FromRectangle(normalBounds);
+        snapshot = new WindowSnapshot(handle, placement, normalBounds, screen);
+        return true;
+    }
+
+    private static bool IsMinimized(IntPtr handle)
+    {
+        return NativeMethods.IsIconic(handle);
+    }
+
+    private bool ApplyPlacement(
+        IntPtr handle,
+        NativeMethods.WINDOWPLACEMENT placement,
+        Rectangle targetBounds)
+    {
+        placement.length = Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
+        placement.rcNormalPosition = NativeMethods.RECT.FromRectangle(targetBounds);
+
+        if (!NativeMethods.SetWindowPlacement(handle, ref placement))
+        {
+            return false;
+        }
+
+        if (placement.showCmd == NativeMethods.ShowWindowCommand.Maximize)
+        {
+            NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Restore);
+            NativeMethods.SetWindowPlacement(handle, ref placement);
+            NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Maximize);
+        }
+
+        return true;
+    }
+
     private bool IsCloaked(IntPtr handle)
     {
         return NativeMethods.DwmGetWindowAttribute(
@@ -210,4 +324,12 @@ internal sealed class WindowMover
 
         return new Rectangle(targetLeft, targetTop, targetWidth, targetHeight);
     }
+
+    private readonly record struct WindowSnapshot(
+        IntPtr Handle,
+        NativeMethods.WINDOWPLACEMENT Placement,
+        Rectangle NormalBounds,
+        Screen Screen);
 }
+
+internal readonly record struct TrackedWindow(IntPtr Handle, string ScreenDeviceName);

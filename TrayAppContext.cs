@@ -8,12 +8,15 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly NotifyIcon _notifyIcon;
     private readonly SettingsStore _settingsStore;
     private readonly StartupManager _startupManager;
+    private readonly System.Windows.Forms.Timer _foregroundTracker;
     private readonly WindowMover _windowMover = new();
     private readonly AppSettings _settings;
     private readonly ToolStripMenuItem _leftClickActiveItem;
     private readonly ToolStripMenuItem _leftClickAllItem;
     private readonly ToolStripMenuItem _notificationsItem;
     private readonly ToolStripMenuItem _startupItem;
+    private readonly Dictionary<string, IntPtr> _lastWindowByMonitor = new(StringComparer.Ordinal);
+    private TrackedWindow _lastTrackedWindow;
 
     public TrayAppContext()
     {
@@ -66,11 +69,19 @@ internal sealed class TrayAppContext : ApplicationContext
         ApplyLeftClickChecks();
 
         _notifyIcon.MouseClick += NotifyIconOnMouseClick;
+        _foregroundTracker = new System.Windows.Forms.Timer
+        {
+            Interval = 250
+        };
+        _foregroundTracker.Tick += TrackForegroundWindow;
+        _foregroundTracker.Start();
         ShowStatus("Левый клик выполняет выбранное действие из меню.");
     }
 
     protected override void ExitThreadCore()
     {
+        _foregroundTracker.Stop();
+        _foregroundTracker.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Icon?.Dispose();
         _notifyIcon.Dispose();
@@ -95,9 +106,31 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private void MoveActiveWindow()
     {
-        ExecuteMove(
-            () => _windowMover.MoveActiveWindowBetweenMonitors(),
-            count => count == 1 ? "Активное окно перенесено." : $"Перемещено окон: {count}.");
+        var otherMonitorWindow = GetLastWindowOnOtherMonitor();
+
+        try
+        {
+            if (otherMonitorWindow.Handle == IntPtr.Zero)
+            {
+                ShowStatus("На другом мониторе нет запомненного открытого окна для обмена.");
+                return;
+            }
+
+            var movedCount = _windowMover.MoveActiveWindowBetweenMonitors(_lastTrackedWindow.Handle, otherMonitorWindow.Handle);
+
+            if (movedCount >= 2)
+            {
+                RememberSwap(otherMonitorWindow);
+                ShowStatus("Активное окно и окно на другом мониторе поменялись местами.");
+                return;
+            }
+
+            ShowStatus($"Перемещено окон: {movedCount}.");
+        }
+        catch (Exception ex)
+        {
+            ShowStatus(ex.Message, ToolTipIcon.Warning);
+        }
     }
 
     private void MoveAllWindows()
@@ -163,6 +196,68 @@ internal sealed class TrayAppContext : ApplicationContext
         if (_settings.ShowNotifications)
         {
             ShowStatus("Уведомления включены.");
+        }
+    }
+
+    private void TrackForegroundWindow(object? sender, EventArgs e)
+    {
+        if (_windowMover.TryGetMovableForegroundWindow(out var trackedWindow))
+        {
+            RemoveHandleFromMonitorCache(trackedWindow.Handle);
+            _lastTrackedWindow = trackedWindow;
+            _lastWindowByMonitor[trackedWindow.ScreenDeviceName] = trackedWindow.Handle;
+        }
+    }
+
+    private TrackedWindow GetLastWindowOnOtherMonitor()
+    {
+        if (_lastTrackedWindow.Handle == IntPtr.Zero)
+        {
+            return default;
+        }
+
+        foreach (var entry in _lastWindowByMonitor)
+        {
+            if (!string.Equals(entry.Key, _lastTrackedWindow.ScreenDeviceName, StringComparison.Ordinal))
+            {
+                return new TrackedWindow(entry.Value, entry.Key);
+            }
+        }
+
+        return default;
+    }
+
+    private void RememberSwap(TrackedWindow otherMonitorWindow)
+    {
+        if (_lastTrackedWindow.Handle == IntPtr.Zero || otherMonitorWindow.Handle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var previousActive = _lastTrackedWindow;
+        RemoveHandleFromMonitorCache(previousActive.Handle);
+        RemoveHandleFromMonitorCache(otherMonitorWindow.Handle);
+
+        _lastWindowByMonitor[previousActive.ScreenDeviceName] = otherMonitorWindow.Handle;
+        _lastWindowByMonitor[otherMonitorWindow.ScreenDeviceName] = previousActive.Handle;
+        _lastTrackedWindow = new TrackedWindow(previousActive.Handle, otherMonitorWindow.ScreenDeviceName);
+    }
+
+    private void RemoveHandleFromMonitorCache(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero || _lastWindowByMonitor.Count == 0)
+        {
+            return;
+        }
+
+        var keysToRemove = _lastWindowByMonitor
+            .Where(entry => entry.Value == handle)
+            .Select(entry => entry.Key)
+            .ToArray();
+
+        foreach (var key in keysToRemove)
+        {
+            _lastWindowByMonitor.Remove(key);
         }
     }
 
