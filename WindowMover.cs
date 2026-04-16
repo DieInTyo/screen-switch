@@ -10,7 +10,37 @@ internal sealed class WindowMover
     private const int DwmaCloaked = 14;
     private readonly int _currentProcessId = Environment.ProcessId;
 
+    public int MoveActiveWindowBetweenMonitors()
+    {
+        var screens = GetTwoScreens();
+        var handle = GetPreferredWindowHandle();
+        if (handle == IntPtr.Zero)
+        {
+            throw new InvalidOperationException("Не удалось определить активное окно для переноса.");
+        }
+
+        return MoveSingleWindow(handle, screens, restoreFocus: true) ? 1 : 0;
+    }
+
     public int MoveAllWindowsBetweenMonitors()
+    {
+        var screens = GetTwoScreens();
+        var moved = 0;
+
+        NativeMethods.EnumWindows((handle, _) =>
+        {
+            if (MoveSingleWindow(handle, screens, restoreFocus: false))
+            {
+                moved++;
+            }
+
+            return true;
+        }, IntPtr.Zero);
+
+        return moved;
+    }
+
+    private Screen[] GetTwoScreens()
     {
         var screens = Screen.AllScreens
             .OrderBy(screen => screen.Bounds.Left)
@@ -22,8 +52,18 @@ internal sealed class WindowMover
             throw new InvalidOperationException("Приложение работает только когда подключено ровно два монитора.");
         }
 
-        var moved = 0;
+        return screens;
+    }
 
+    private IntPtr GetPreferredWindowHandle()
+    {
+        var foregroundWindow = NativeMethods.GetForegroundWindow();
+        if (ShouldMoveWindow(foregroundWindow))
+        {
+            return foregroundWindow;
+        }
+
+        var fallback = IntPtr.Zero;
         NativeMethods.EnumWindows((handle, _) =>
         {
             if (!ShouldMoveWindow(handle))
@@ -31,47 +71,62 @@ internal sealed class WindowMover
                 return true;
             }
 
-            if (!NativeMethods.GetWindowPlacement(handle, out var placement))
-            {
-                return true;
-            }
-
-            var normalBounds = placement.rcNormalPosition.ToRectangle();
-            if (normalBounds.Width <= 0 || normalBounds.Height <= 0)
-            {
-                return true;
-            }
-
-            var currentScreen = Screen.FromRectangle(normalBounds);
-            if (screens.All(screen => screen.DeviceName != currentScreen.DeviceName))
-            {
-                return true;
-            }
-
-            var targetScreen = screens[0].DeviceName == currentScreen.DeviceName ? screens[1] : screens[0];
-            var targetBounds = MapBounds(normalBounds, currentScreen.WorkingArea, targetScreen.WorkingArea);
-
-            placement.length = Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
-            placement.flags = 0;
-            placement.rcNormalPosition = NativeMethods.RECT.FromRectangle(targetBounds);
-
-            if (!NativeMethods.SetWindowPlacement(handle, ref placement))
-            {
-                return true;
-            }
-
-            if (placement.showCmd == NativeMethods.ShowWindowCommand.Maximize)
-            {
-                NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Restore);
-                NativeMethods.SetWindowPlacement(handle, ref placement);
-                NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Maximize);
-            }
-
-            moved++;
-            return true;
+            fallback = handle;
+            return false;
         }, IntPtr.Zero);
 
-        return moved;
+        return fallback;
+    }
+
+    private bool MoveSingleWindow(IntPtr handle, Screen[] screens, bool restoreFocus)
+    {
+        if (!ShouldMoveWindow(handle))
+        {
+            return false;
+        }
+
+        if (!NativeMethods.GetWindowPlacement(handle, out var placement))
+        {
+            return false;
+        }
+
+        var normalBounds = placement.rcNormalPosition.ToRectangle();
+        if (normalBounds.Width <= 0 || normalBounds.Height <= 0)
+        {
+            return false;
+        }
+
+        var currentScreen = Screen.FromRectangle(normalBounds);
+        if (screens.All(screen => screen.DeviceName != currentScreen.DeviceName))
+        {
+            return false;
+        }
+
+        var targetScreen = screens[0].DeviceName == currentScreen.DeviceName ? screens[1] : screens[0];
+        var targetBounds = MapBounds(normalBounds, currentScreen.WorkingArea, targetScreen.WorkingArea);
+
+        placement.length = Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
+        placement.flags = 0;
+        placement.rcNormalPosition = NativeMethods.RECT.FromRectangle(targetBounds);
+
+        if (!NativeMethods.SetWindowPlacement(handle, ref placement))
+        {
+            return false;
+        }
+
+        if (placement.showCmd == NativeMethods.ShowWindowCommand.Maximize)
+        {
+            NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Restore);
+            NativeMethods.SetWindowPlacement(handle, ref placement);
+            NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Maximize);
+        }
+
+        if (restoreFocus)
+        {
+            NativeMethods.SetForegroundWindow(handle);
+        }
+
+        return true;
     }
 
     private bool ShouldMoveWindow(IntPtr handle)

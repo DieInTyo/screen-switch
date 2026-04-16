@@ -20,6 +20,9 @@ internal static class NativeMethods
     internal static extern bool IsWindowVisible(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    internal static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
     internal static extern IntPtr GetWindow(IntPtr hWnd, GetWindowCommand uCmd);
 
     [DllImport("user32.dll")]
@@ -39,6 +42,9 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     internal static extern bool ShowWindow(IntPtr hWnd, ShowWindowCommand nCmdShow);
+
+    [DllImport("user32.dll")]
+    internal static extern bool SetForegroundWindow(IntPtr hWnd);
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
     internal static extern IntPtr GetWindowLongPtr(IntPtr hWnd, WindowLongIndex nIndex);

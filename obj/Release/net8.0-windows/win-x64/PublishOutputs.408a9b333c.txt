@@ -1,0 +1,2 @@
+D:\dev\screen switch\release-portable\ScreenSwitch.pdb
+D:\dev\screen switch\release-portable\ScreenSwitch.exe

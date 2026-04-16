@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("ScreenSwitch")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+454ef5ead4007c59a21432f053f9bb5da2ff0c5d")]
 [assembly: System.Reflection.AssemblyProductAttribute("ScreenSwitch")]
 [assembly: System.Reflection.AssemblyTitleAttribute("ScreenSwitch")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
