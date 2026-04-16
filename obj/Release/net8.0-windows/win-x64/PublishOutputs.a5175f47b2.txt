@@ -1,0 +1,2 @@
+D:\dev\screen switch\bin\Release\net8.0-windows\win-x64\publish\ScreenSwitch.pdb
+D:\dev\screen switch\bin\Release\net8.0-windows\win-x64\publish\ScreenSwitch.exe
