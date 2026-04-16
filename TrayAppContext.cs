@@ -12,6 +12,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly AppSettings _settings;
     private readonly ToolStripMenuItem _leftClickActiveItem;
     private readonly ToolStripMenuItem _leftClickAllItem;
+    private readonly ToolStripMenuItem _notificationsItem;
     private readonly ToolStripMenuItem _startupItem;
 
     public TrayAppContext()
@@ -38,6 +39,13 @@ internal sealed class TrayAppContext : ApplicationContext
         leftClickMenu.DropDownItems.Add(_leftClickAllItem);
         menu.Items.Add(leftClickMenu);
 
+        _notificationsItem = new ToolStripMenuItem("Показывать уведомления", null, ToggleNotifications)
+        {
+            CheckOnClick = true,
+            Checked = _settings.ShowNotifications
+        };
+        menu.Items.Add(_notificationsItem);
+
         _startupItem = new ToolStripMenuItem("Запускать вместе с Windows", null, ToggleStartup)
         {
             CheckOnClick = true,
@@ -58,11 +66,7 @@ internal sealed class TrayAppContext : ApplicationContext
         ApplyLeftClickChecks();
 
         _notifyIcon.MouseClick += NotifyIconOnMouseClick;
-        _notifyIcon.ShowBalloonTip(
-            2500,
-            "Screen Switch",
-            "Левый клик выполняет выбранное действие из меню.",
-            ToolTipIcon.Info);
+        ShowStatus("Левый клик выполняет выбранное действие из меню.");
     }
 
     protected override void ExitThreadCore()
@@ -151,8 +155,24 @@ internal sealed class TrayAppContext : ApplicationContext
         }
     }
 
+    private void ToggleNotifications(object? sender, EventArgs e)
+    {
+        _settings.ShowNotifications = _notificationsItem.Checked;
+        _settingsStore.Save(_settings);
+
+        if (_settings.ShowNotifications)
+        {
+            ShowStatus("Уведомления включены.");
+        }
+    }
+
     private void ShowStatus(string message, ToolTipIcon icon = ToolTipIcon.Info)
     {
+        if (!_settings.ShowNotifications)
+        {
+            return;
+        }
+
         _notifyIcon.BalloonTipTitle = "Screen Switch";
         _notifyIcon.BalloonTipText = message;
         _notifyIcon.BalloonTipIcon = icon;

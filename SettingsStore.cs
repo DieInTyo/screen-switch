@@ -49,3 +49,15 @@ internal sealed class SettingsStore
         File.WriteAllText(_settingsPath, json);
     }
 }
+
+internal sealed class AppSettings
+{
+    public LeftClickAction LeftClickAction { get; set; } = LeftClickAction.ActiveWindow;
+    public bool ShowNotifications { get; set; } = true;
+}
+
+internal enum LeftClickAction
+{
+    ActiveWindow = 0,
+    AllWindows = 1
+}

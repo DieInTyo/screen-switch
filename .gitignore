@@ -1,0 +1,9 @@
+bin/
+obj/
+.dotnet/
+.nuget/
+release-portable/
+release-portable-2/
+release/
+ScreenSwitch.exe
+*.pdb
