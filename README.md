@@ -1,4 +1,4 @@
-# Window Switch
+# Screen Switch
 
 Небольшое Windows tray-приложение для переноса окон между двумя мониторами.
 
