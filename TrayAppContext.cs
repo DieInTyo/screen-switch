@@ -68,6 +68,10 @@ internal sealed class TrayAppContext : ApplicationContext
         });
         menu.Items.Add(_moveAllItem);
         _moveWindowMenu = new ToolStripMenuItem();
+        _moveWindowMenu.DropDownItems.Add(new ToolStripMenuItem(string.Empty)
+        {
+            Enabled = false
+        });
         _moveWindowMenu.DropDownOpening += (_, _) =>
         {
             _selectedMoveWindowHandles.Clear();
@@ -341,6 +345,12 @@ internal sealed class TrayAppContext : ApplicationContext
 
             _moveWindowMenu.DropDownItems.Add(appItem);
         }
+
+        _moveWindowMenu.DropDownItems.Add(new ToolStripSeparator());
+        _moveWindowMenu.DropDownItems.Add(new ToolStripMenuItem(_text.MoveWindowDoubleClickHint)
+        {
+            Enabled = false
+        });
     }
 
     private ToolStripMenuItem CreateWindowMenuItem(string label, MovableWindowInfo window)

@@ -18,6 +18,7 @@ internal sealed class LocalizedStrings
     public string MoveAllWindows => IsRussian ? "Переместить все окна" : "Move all windows";
     public string MoveWindow => IsRussian ? "Перенести окно" : "Move window";
     public string MoveSelectedWindows => IsRussian ? "Перенести выбранные" : "Move selected";
+    public string MoveWindowDoubleClickHint => IsRussian ? "Двойной клик переносит одно окно" : "Double-click moves one window";
     public string NoWindowsFound => IsRussian ? "Окна не найдены" : "No windows found";
     public string WindowMoved => IsRussian ? "Окно перенесено." : "Window moved.";
     public string WindowMoveFailed => IsRussian ? "Не удалось перенести выбранное окно." : "Could not move the selected window.";
