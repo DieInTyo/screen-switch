@@ -60,6 +60,7 @@ internal sealed class AppSettings
     public HotkeyGesture? SelectedModeHotkey { get; set; }
     public HotkeyGesture? ActiveWindowHotkey { get; set; }
     public HotkeyGesture? AllWindowsHotkey { get; set; }
+    public AppLanguage Language { get; set; } = AppLanguage.English;
 }
 
 internal enum LeftClickAction
@@ -73,6 +74,12 @@ internal enum HotkeyAction
     SelectedMode = 0,
     ActiveWindow = 1,
     AllWindows = 2
+}
+
+internal enum AppLanguage
+{
+    English = 0,
+    Russian = 1
 }
 
 internal sealed class HotkeyGesture
@@ -126,7 +133,7 @@ internal sealed class HotkeyGesture
     {
         if (!IsValid())
         {
-            return "Не назначено";
+            return "Not assigned";
         }
 
         var parts = new List<string>();

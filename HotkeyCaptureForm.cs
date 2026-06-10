@@ -7,12 +7,14 @@ internal sealed class HotkeyCaptureForm : Form
 {
     private const int VirtualKeyLeftWin = 0x5B;
     private const int VirtualKeyRightWin = 0x5C;
+    private readonly LocalizedStrings _text;
     private readonly Label _hintLabel;
     private readonly Label _currentLabel;
 
-    public HotkeyCaptureForm(string actionName, HotkeyGesture? currentGesture)
+    public HotkeyCaptureForm(string actionName, HotkeyGesture? currentGesture, LocalizedStrings text)
     {
-        Text = $"Горячая клавиша: {actionName}";
+        _text = text;
+        Text = _text.HotkeyCaptureTitle(actionName);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -27,7 +29,7 @@ internal sealed class HotkeyCaptureForm : Form
             TextAlign = ContentAlignment.MiddleCenter,
             Dock = DockStyle.Top,
             Height = 64,
-            Text = "Нажми сочетание с Ctrl, Alt, Shift или Win"
+            Text = _text.HotkeyCapturePrompt
         };
 
         _currentLabel = new Label
@@ -36,7 +38,7 @@ internal sealed class HotkeyCaptureForm : Form
             TextAlign = ContentAlignment.MiddleCenter,
             Dock = DockStyle.Top,
             Height = 36,
-            Text = $"Сейчас: {FormatGesture(currentGesture)}"
+            Text = _text.HotkeyCaptureCurrent(FormatGesture(currentGesture, _text))
         };
 
         var noteLabel = new Label
@@ -44,7 +46,7 @@ internal sealed class HotkeyCaptureForm : Form
             AutoSize = false,
             TextAlign = ContentAlignment.MiddleCenter,
             Dock = DockStyle.Fill,
-            Text = "Esc, Space, Backspace или Delete оставят поле пустым"
+            Text = _text.HotkeyCaptureClearNote
         };
 
         Controls.Add(noteLabel);
@@ -69,7 +71,7 @@ internal sealed class HotkeyCaptureForm : Form
 
         if (HotkeyGesture.IsModifierKey(e.KeyCode))
         {
-            _hintLabel.Text = "Добавь обычную клавишу к модификатору";
+            _hintLabel.Text = _text.HotkeyCaptureModifierOnly;
             return;
         }
 
@@ -84,7 +86,7 @@ internal sealed class HotkeyCaptureForm : Form
 
         if (!gesture.IsValid())
         {
-            _hintLabel.Text = "Нужно сочетание с Ctrl, Alt, Shift или Win";
+            _hintLabel.Text = _text.HotkeyCaptureNeedsModifier;
             return;
         }
 
@@ -99,8 +101,10 @@ internal sealed class HotkeyCaptureForm : Form
             || (NativeMethods.GetKeyState(VirtualKeyRightWin) & 0x8000) != 0;
     }
 
-    private static string FormatGesture(HotkeyGesture? gesture)
+    private static string FormatGesture(HotkeyGesture? gesture, LocalizedStrings text)
     {
-        return gesture?.ToDisplayString() ?? "Не назначено";
+        return gesture is not null && gesture.IsValid()
+            ? gesture.ToDisplayString()
+            : text.NotAssigned;
     }
 }

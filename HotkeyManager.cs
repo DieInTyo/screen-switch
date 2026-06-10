@@ -27,9 +27,9 @@ internal sealed class HotkeyManager : NativeWindow, IDisposable
 
         var failures = new List<HotkeyRegistrationFailure>();
         var usedGestures = new HashSet<string>(StringComparer.Ordinal);
-        RegisterIfValid(HotkeyAction.SelectedMode, settings.SelectedModeHotkey, "Выбранный режим", usedGestures, failures);
-        RegisterIfValid(HotkeyAction.ActiveWindow, settings.ActiveWindowHotkey, "Активное окно", usedGestures, failures);
-        RegisterIfValid(HotkeyAction.AllWindows, settings.AllWindowsHotkey, "Все окна", usedGestures, failures);
+        RegisterIfValid(HotkeyAction.SelectedMode, settings.SelectedModeHotkey, usedGestures, failures);
+        RegisterIfValid(HotkeyAction.ActiveWindow, settings.ActiveWindowHotkey, usedGestures, failures);
+        RegisterIfValid(HotkeyAction.AllWindows, settings.AllWindowsHotkey, usedGestures, failures);
         return failures;
     }
 
@@ -60,7 +60,6 @@ internal sealed class HotkeyManager : NativeWindow, IDisposable
     private void RegisterIfValid(
         HotkeyAction action,
         HotkeyGesture? gesture,
-        string displayName,
         HashSet<string> usedGestures,
         List<HotkeyRegistrationFailure> failures)
     {
@@ -73,8 +72,7 @@ internal sealed class HotkeyManager : NativeWindow, IDisposable
         var gestureKey = $"{gesture.ToNativeModifiers()}:{(uint)gesture.Key}";
         if (!usedGestures.Add(gestureKey))
         {
-            var message = "Это сочетание уже назначено другому действию Screen Switch.";
-            failures.Add(new HotkeyRegistrationFailure(action, message));
+            failures.Add(new HotkeyRegistrationFailure(action, HotkeyRegistrationFailureKind.Duplicate, 0));
             DiagnosticLog.Info($"hotkey duplicate action={action} gesture={displayGesture}");
             return;
         }
@@ -83,10 +81,10 @@ internal sealed class HotkeyManager : NativeWindow, IDisposable
         if (!NativeMethods.RegisterHotKey(Handle, id, gesture.ToNativeModifiers(), (uint)gesture.Key))
         {
             var error = Marshal.GetLastWin32Error();
-            var message = error == 1409
-                ? "Конфликт с системным или другим глобальным сочетанием клавиш."
-                : $"Не удалось зарегистрировать сочетание клавиш. Код ошибки: {error}.";
-            failures.Add(new HotkeyRegistrationFailure(action, message));
+            var kind = error == 1409
+                ? HotkeyRegistrationFailureKind.SystemConflict
+                : HotkeyRegistrationFailureKind.RegistrationError;
+            failures.Add(new HotkeyRegistrationFailure(action, kind, error));
             DiagnosticLog.Info($"hotkey register failed action={action} gesture={displayGesture} error={error}");
             return;
         }
@@ -114,4 +112,14 @@ internal sealed class HotkeyManager : NativeWindow, IDisposable
     }
 }
 
-internal readonly record struct HotkeyRegistrationFailure(HotkeyAction Action, string Message);
+internal enum HotkeyRegistrationFailureKind
+{
+    Duplicate = 0,
+    SystemConflict = 1,
+    RegistrationError = 2
+}
+
+internal readonly record struct HotkeyRegistrationFailure(
+    HotkeyAction Action,
+    HotkeyRegistrationFailureKind Kind,
+    int ErrorCode);

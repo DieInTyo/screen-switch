@@ -14,17 +14,27 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly WindowMover _windowMover = new();
     private readonly HotkeyManager _hotkeyManager;
     private readonly AppSettings _settings;
+    private readonly ToolStripMenuItem _moveActiveItem;
+    private readonly ToolStripMenuItem _moveAllItem;
+    private readonly ToolStripMenuItem _leftClickMenu;
     private readonly ToolStripMenuItem _leftClickActiveItem;
     private readonly ToolStripMenuItem _leftClickAllItem;
     private readonly ToolStripMenuItem _moveMinimizedItem;
+    private readonly ToolStripMenuItem _hotkeysMenu;
     private readonly ToolStripMenuItem _hotkeysEnabledItem;
     private readonly ToolStripMenuItem _hotkeySelectedModeItem;
     private readonly ToolStripMenuItem _hotkeyActiveWindowItem;
     private readonly ToolStripMenuItem _hotkeyAllWindowsItem;
+    private readonly ToolStripMenuItem _resetHotkeysItem;
     private readonly ToolStripMenuItem _notificationsItem;
     private readonly ToolStripMenuItem _startupItem;
+    private readonly ToolStripMenuItem _languageMenu;
+    private readonly ToolStripMenuItem _englishLanguageItem;
+    private readonly ToolStripMenuItem _russianLanguageItem;
+    private readonly ToolStripMenuItem _exitItem;
     private readonly Dictionary<string, IntPtr> _lastWindowByMonitor = new(StringComparer.Ordinal);
-    private readonly Dictionary<HotkeyAction, string> _hotkeyRegistrationErrors = new();
+    private readonly Dictionary<HotkeyAction, HotkeyRegistrationFailure> _hotkeyRegistrationErrors = new();
+    private LocalizedStrings _text;
     private TrackedWindow _lastTrackedWindow;
     private bool _allowMenuCloseOnce;
 
@@ -34,6 +44,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _settingsStore = new SettingsStore();
         _startupManager = new StartupManager();
         _settings = _settingsStore.Load();
+        _text = LocalizedStrings.For(_settings.Language);
 
         var menu = new ContextMenuStrip
         {
@@ -41,38 +52,40 @@ internal sealed class TrayAppContext : ApplicationContext
         };
         menu.Closing += MenuOnClosing;
         menu.Closed += (_, _) => _allowMenuCloseOnce = false;
-        menu.Items.Add("Переместить активное окно", null, (_, _) =>
+        _moveActiveItem = new ToolStripMenuItem(string.Empty, null, (_, _) =>
         {
             AllowMenuClose();
             MoveActiveWindow();
         });
-        menu.Items.Add("Переместить все окна", null, (_, _) =>
+        menu.Items.Add(_moveActiveItem);
+        _moveAllItem = new ToolStripMenuItem(string.Empty, null, (_, _) =>
         {
             AllowMenuClose();
             MoveAllWindows();
         });
+        menu.Items.Add(_moveAllItem);
         menu.Items.Add(new ToolStripSeparator());
 
-        var leftClickMenu = new ToolStripMenuItem("Левый клик");
-        leftClickMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(leftClickMenu);
-        leftClickMenu.DropDown.Closing += MenuOnClosing;
-        _leftClickActiveItem = new ToolStripMenuItem("Перемещать активное окно", null, (_, _) => SetLeftClickAction(LeftClickAction.ActiveWindow))
+        _leftClickMenu = new ToolStripMenuItem();
+        _leftClickMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(_leftClickMenu);
+        _leftClickMenu.DropDown.Closing += MenuOnClosing;
+        _leftClickActiveItem = new ToolStripMenuItem(string.Empty, null, (_, _) => SetLeftClickAction(LeftClickAction.ActiveWindow))
         {
             CheckOnClick = true
         };
-        _leftClickAllItem = new ToolStripMenuItem("Перемещать все окна", null, (_, _) => SetLeftClickAction(LeftClickAction.AllWindows))
+        _leftClickAllItem = new ToolStripMenuItem(string.Empty, null, (_, _) => SetLeftClickAction(LeftClickAction.AllWindows))
         {
             CheckOnClick = true
         };
-        leftClickMenu.DropDownItems.Add(_leftClickActiveItem);
-        leftClickMenu.DropDownItems.Add(_leftClickAllItem);
-        menu.Items.Add(leftClickMenu);
+        _leftClickMenu.DropDownItems.Add(_leftClickActiveItem);
+        _leftClickMenu.DropDownItems.Add(_leftClickAllItem);
+        menu.Items.Add(_leftClickMenu);
 
-        var hotkeysMenu = new ToolStripMenuItem("Горячие клавиши");
-        hotkeysMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(hotkeysMenu);
-        hotkeysMenu.DropDown.ShowItemToolTips = true;
-        hotkeysMenu.DropDown.Closing += MenuOnClosing;
-        _hotkeysEnabledItem = new ToolStripMenuItem("Включить горячие клавиши", null, ToggleHotkeys)
+        _hotkeysMenu = new ToolStripMenuItem();
+        _hotkeysMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(_hotkeysMenu);
+        _hotkeysMenu.DropDown.ShowItemToolTips = true;
+        _hotkeysMenu.DropDown.Closing += MenuOnClosing;
+        _hotkeysEnabledItem = new ToolStripMenuItem(string.Empty, null, ToggleHotkeys)
         {
             CheckOnClick = true,
             Checked = _settings.HotkeysEnabled
@@ -80,41 +93,58 @@ internal sealed class TrayAppContext : ApplicationContext
         _hotkeySelectedModeItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.SelectedMode));
         _hotkeyActiveWindowItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.ActiveWindow));
         _hotkeyAllWindowsItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.AllWindows));
-        hotkeysMenu.DropDownItems.Add(_hotkeysEnabledItem);
-        hotkeysMenu.DropDownItems.Add(new ToolStripSeparator());
-        hotkeysMenu.DropDownItems.Add(_hotkeySelectedModeItem);
-        hotkeysMenu.DropDownItems.Add(_hotkeyActiveWindowItem);
-        hotkeysMenu.DropDownItems.Add(_hotkeyAllWindowsItem);
-        hotkeysMenu.DropDownItems.Add(new ToolStripSeparator());
-        hotkeysMenu.DropDownItems.Add("Сбросить горячие клавиши", null, (_, _) => ResetHotkeys());
-        menu.Items.Add(hotkeysMenu);
+        _resetHotkeysItem = new ToolStripMenuItem(string.Empty, null, (_, _) => ResetHotkeys());
+        _hotkeysMenu.DropDownItems.Add(_hotkeysEnabledItem);
+        _hotkeysMenu.DropDownItems.Add(new ToolStripSeparator());
+        _hotkeysMenu.DropDownItems.Add(_hotkeySelectedModeItem);
+        _hotkeysMenu.DropDownItems.Add(_hotkeyActiveWindowItem);
+        _hotkeysMenu.DropDownItems.Add(_hotkeyAllWindowsItem);
+        _hotkeysMenu.DropDownItems.Add(new ToolStripSeparator());
+        _hotkeysMenu.DropDownItems.Add(_resetHotkeysItem);
+        menu.Items.Add(_hotkeysMenu);
 
-        _moveMinimizedItem = new ToolStripMenuItem("Переносить свернутые окна", null, ToggleMoveMinimizedWindows)
+        _moveMinimizedItem = new ToolStripMenuItem(string.Empty, null, ToggleMoveMinimizedWindows)
         {
             CheckOnClick = true,
             Checked = _settings.MoveMinimizedWindows
         };
         menu.Items.Add(_moveMinimizedItem);
 
-        _notificationsItem = new ToolStripMenuItem("Показывать уведомления", null, ToggleNotifications)
+        _notificationsItem = new ToolStripMenuItem(string.Empty, null, ToggleNotifications)
         {
             CheckOnClick = true,
             Checked = _settings.ShowNotifications
         };
         menu.Items.Add(_notificationsItem);
 
-        _startupItem = new ToolStripMenuItem("Запускать вместе с Windows", null, ToggleStartup)
+        _startupItem = new ToolStripMenuItem(string.Empty, null, ToggleStartup)
         {
             CheckOnClick = true,
             Checked = _startupManager.IsEnabled()
         };
         menu.Items.Add(_startupItem);
+
+        _languageMenu = new ToolStripMenuItem();
+        _languageMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(_languageMenu);
+        _languageMenu.DropDown.Closing += MenuOnClosing;
+        _englishLanguageItem = new ToolStripMenuItem("English", null, (_, _) => SetLanguage(AppLanguage.English))
+        {
+            CheckOnClick = true
+        };
+        _russianLanguageItem = new ToolStripMenuItem("Русский", null, (_, _) => SetLanguage(AppLanguage.Russian))
+        {
+            CheckOnClick = true
+        };
+        _languageMenu.DropDownItems.Add(_englishLanguageItem);
+        _languageMenu.DropDownItems.Add(_russianLanguageItem);
+        menu.Items.Add(_languageMenu);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Выход", null, (_, _) =>
+        _exitItem = new ToolStripMenuItem(string.Empty, null, (_, _) =>
         {
             AllowMenuClose();
             ExitThread();
         });
+        menu.Items.Add(_exitItem);
 
         _notifyIcon = new NotifyIcon
         {
@@ -125,7 +155,8 @@ internal sealed class TrayAppContext : ApplicationContext
         };
 
         ApplyLeftClickChecks();
-        UpdateHotkeyMenuText();
+        ApplyLanguageChecks();
+        ApplyUiText();
 
         _hotkeyManager = new HotkeyManager();
         _hotkeyManager.HotkeyPressed += OnHotkeyPressed;
@@ -138,7 +169,7 @@ internal sealed class TrayAppContext : ApplicationContext
         };
         _foregroundTracker.Tick += TrackForegroundWindow;
         _foregroundTracker.Start();
-        ShowStatus("Левый клик выполняет выбранное действие из меню.");
+        ShowStatus(_text.InitialStatus);
     }
 
     protected override void ExitThreadCore()
@@ -173,16 +204,16 @@ internal sealed class TrayAppContext : ApplicationContext
 
             if (movedCount >= 2)
             {
-                ShowStatus("Активное окно и окно на другом мониторе поменялись местами.");
+                ShowStatus(_text.ActiveSwapCompleted);
                 return;
             }
 
-            ShowStatus($"Перемещено окон: {movedCount}.");
+            ShowStatus($"{_text.MovedWindowsPrefix}: {movedCount}.");
         }
         catch (Exception ex)
         {
             UpdateTrackerInterval();
-            ShowStatus(ex.Message, ToolTipIcon.Warning);
+            ShowStatus(LocalizeError(ex), ToolTipIcon.Warning);
         }
     }
 
@@ -190,7 +221,7 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         ExecuteMove(
             () => _windowMover.MoveAllWindowsBetweenMonitors(_settings.MoveMinimizedWindows),
-            count => $"Перемещено окон: {count}.");
+            count => $"{_text.MovedWindowsPrefix}: {count}.");
     }
 
     private void ExecuteMove(Func<int> action, Func<int, string> successMessageFactory)
@@ -204,7 +235,7 @@ internal sealed class TrayAppContext : ApplicationContext
         catch (Exception ex)
         {
             UpdateTrackerInterval();
-            ShowStatus(ex.Message, ToolTipIcon.Warning);
+            ShowStatus(LocalizeError(ex), ToolTipIcon.Warning);
         }
     }
 
@@ -215,8 +246,8 @@ internal sealed class TrayAppContext : ApplicationContext
         ApplyLeftClickChecks();
 
         var description = action == LeftClickAction.ActiveWindow
-            ? "Теперь левый клик переносит активное окно."
-            : "Теперь левый клик переносит все окна.";
+            ? _text.LeftClickNowActive
+            : _text.LeftClickNowAll;
         ShowStatus(description);
     }
 
@@ -224,6 +255,30 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         _leftClickActiveItem.Checked = _settings.LeftClickAction == LeftClickAction.ActiveWindow;
         _leftClickAllItem.Checked = _settings.LeftClickAction == LeftClickAction.AllWindows;
+    }
+
+    private void ApplyLanguageChecks()
+    {
+        _englishLanguageItem.Checked = _settings.Language == AppLanguage.English;
+        _russianLanguageItem.Checked = _settings.Language == AppLanguage.Russian;
+    }
+
+    private void ApplyUiText()
+    {
+        _moveActiveItem.Text = _text.MoveActiveWindow;
+        _moveAllItem.Text = _text.MoveAllWindows;
+        _leftClickMenu.Text = _text.LeftClick;
+        _leftClickActiveItem.Text = _text.LeftClickActive;
+        _leftClickAllItem.Text = _text.LeftClickAll;
+        _hotkeysMenu.Text = _text.Hotkeys;
+        _hotkeysEnabledItem.Text = _text.EnableHotkeys;
+        _resetHotkeysItem.Text = _text.ResetHotkeys;
+        _moveMinimizedItem.Text = _text.MoveMinimizedWindows;
+        _notificationsItem.Text = _text.ShowNotifications;
+        _startupItem.Text = _text.StartWithWindows;
+        _languageMenu.Text = _text.LanguageMenu;
+        _exitItem.Text = _text.Exit;
+        UpdateHotkeyMenuText();
     }
 
     private void MenuOnClosing(object? sender, ToolStripDropDownClosingEventArgs e)
@@ -268,6 +323,16 @@ internal sealed class TrayAppContext : ApplicationContext
         MoveActiveWindow();
     }
 
+    private void SetLanguage(AppLanguage language)
+    {
+        _settings.Language = language;
+        _settingsStore.Save(_settings);
+        _text = LocalizedStrings.For(language);
+        ApplyLanguageChecks();
+        ApplyUiText();
+        ShowStatus(_text.LanguageChanged);
+    }
+
     private void OnHotkeyPressed(HotkeyAction action)
     {
         switch (action)
@@ -290,8 +355,8 @@ internal sealed class TrayAppContext : ApplicationContext
         _settingsStore.Save(_settings);
         ApplyHotkeyRegistrations(showFailures: true);
         ShowStatus(_settings.HotkeysEnabled
-            ? "Горячие клавиши включены."
-            : "Горячие клавиши выключены.");
+            ? _text.HotkeysEnabled
+            : _text.HotkeysDisabled);
     }
 
     private void CaptureHotkey(HotkeyAction action)
@@ -299,7 +364,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _hotkeyManager.UnregisterAll();
         try
         {
-            using var dialog = new HotkeyCaptureForm(GetHotkeyActionName(action), GetHotkeyGesture(action));
+            using var dialog = new HotkeyCaptureForm(GetHotkeyActionName(action), GetHotkeyGesture(action), _text);
             if (dialog.ShowDialog() != DialogResult.OK)
             {
                 return;
@@ -309,7 +374,7 @@ internal sealed class TrayAppContext : ApplicationContext
             _settingsStore.Save(_settings);
             UpdateHotkeyMenuText();
             ShowStatus(dialog.SelectedGesture is null
-                ? $"{GetHotkeyActionName(action)}: горячая клавиша очищена."
+                ? $"{GetHotkeyActionName(action)}: {_text.HotkeyCleared}"
                 : $"{GetHotkeyActionName(action)}: {dialog.SelectedGesture.ToDisplayString()}.");
         }
         finally
@@ -326,7 +391,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _settingsStore.Save(_settings);
         UpdateHotkeyMenuText();
         ApplyHotkeyRegistrations(showFailures: true);
-        ShowStatus("Горячие клавиши сброшены.");
+        ShowStatus(_text.HotkeysReset);
     }
 
     private void ApplyHotkeyRegistrations(bool showFailures)
@@ -335,22 +400,22 @@ internal sealed class TrayAppContext : ApplicationContext
         _hotkeyRegistrationErrors.Clear();
         foreach (var failure in failures)
         {
-            _hotkeyRegistrationErrors[failure.Action] = failure.Message;
+            _hotkeyRegistrationErrors[failure.Action] = failure;
         }
 
         UpdateHotkeyMenuText();
         if (showFailures && failures.Count > 0)
         {
-            ShowStatus($"{GetHotkeyActionName(failures[0].Action)}: {failures[0].Message}", ToolTipIcon.Warning);
+            ShowStatus($"{GetHotkeyActionName(failures[0].Action)}: {GetHotkeyFailureMessage(failures[0])}", ToolTipIcon.Warning);
         }
     }
 
     private void UpdateHotkeyMenuText()
     {
         _hotkeysEnabledItem.Checked = _settings.HotkeysEnabled;
-        UpdateHotkeyMenuItem(_hotkeySelectedModeItem, "Выбранный режим", _settings.SelectedModeHotkey, HotkeyAction.SelectedMode);
-        UpdateHotkeyMenuItem(_hotkeyActiveWindowItem, "Активное окно", _settings.ActiveWindowHotkey, HotkeyAction.ActiveWindow);
-        UpdateHotkeyMenuItem(_hotkeyAllWindowsItem, "Все окна", _settings.AllWindowsHotkey, HotkeyAction.AllWindows);
+        UpdateHotkeyMenuItem(_hotkeySelectedModeItem, _text.SelectedMode, _settings.SelectedModeHotkey, HotkeyAction.SelectedMode);
+        UpdateHotkeyMenuItem(_hotkeyActiveWindowItem, _text.ActiveWindow, _settings.ActiveWindowHotkey, HotkeyAction.ActiveWindow);
+        UpdateHotkeyMenuItem(_hotkeyAllWindowsItem, _text.AllWindows, _settings.AllWindowsHotkey, HotkeyAction.AllWindows);
     }
 
     private void UpdateHotkeyMenuItem(
@@ -360,15 +425,15 @@ internal sealed class TrayAppContext : ApplicationContext
         HotkeyAction action)
     {
         item.Text = $"{label}: {FormatHotkey(gesture)}";
-        if (_hotkeyRegistrationErrors.TryGetValue(action, out var error))
+        if (_hotkeyRegistrationErrors.TryGetValue(action, out var failure))
         {
             item.ForeColor = Color.Firebrick;
-            item.ToolTipText = error;
+            item.ToolTipText = GetHotkeyFailureMessage(failure);
             return;
         }
 
         item.ForeColor = SystemColors.MenuText;
-        item.ToolTipText = "Нажмите, чтобы назначить горячую клавишу.";
+        item.ToolTipText = _text.AssignHotkeyTooltip;
     }
 
     private HotkeyGesture? GetHotkeyGesture(HotkeyAction action)
@@ -398,19 +463,31 @@ internal sealed class TrayAppContext : ApplicationContext
         }
     }
 
-    private static string FormatHotkey(HotkeyGesture? gesture)
+    private string FormatHotkey(HotkeyGesture? gesture)
     {
-        return gesture?.ToDisplayString() ?? "Не назначено";
+        return gesture is not null && gesture.IsValid()
+            ? gesture.ToDisplayString()
+            : _text.NotAssigned;
     }
 
-    private static string GetHotkeyActionName(HotkeyAction action)
+    private string GetHotkeyActionName(HotkeyAction action)
     {
         return action switch
         {
-            HotkeyAction.SelectedMode => "Выбранный режим",
-            HotkeyAction.ActiveWindow => "Активное окно",
-            HotkeyAction.AllWindows => "Все окна",
-            _ => "Действие"
+            HotkeyAction.SelectedMode => _text.SelectedMode,
+            HotkeyAction.ActiveWindow => _text.ActiveWindow,
+            HotkeyAction.AllWindows => _text.AllWindows,
+            _ => "Action"
+        };
+    }
+
+    private string GetHotkeyFailureMessage(HotkeyRegistrationFailure failure)
+    {
+        return failure.Kind switch
+        {
+            HotkeyRegistrationFailureKind.Duplicate => _text.HotkeyDuplicate,
+            HotkeyRegistrationFailureKind.SystemConflict => _text.HotkeySystemConflict,
+            _ => _text.HotkeyRegisterFailed(failure.ErrorCode)
         };
     }
 
@@ -421,13 +498,13 @@ internal sealed class TrayAppContext : ApplicationContext
             var enabled = _startupItem.Checked;
             _startupManager.SetEnabled(enabled);
             ShowStatus(enabled
-                ? "Автозапуск включен."
-                : "Автозапуск выключен.");
+                ? _text.StartupEnabled
+                : _text.StartupDisabled);
         }
         catch (Exception ex)
         {
             _startupItem.Checked = _startupManager.IsEnabled();
-            ShowStatus($"Не удалось изменить автозапуск: {ex.Message}", ToolTipIcon.Warning);
+            ShowStatus(_text.ChangeStartupFailed(LocalizeError(ex)), ToolTipIcon.Warning);
         }
     }
 
@@ -438,7 +515,7 @@ internal sealed class TrayAppContext : ApplicationContext
 
         if (_settings.ShowNotifications)
         {
-            ShowStatus("Уведомления включены.");
+            ShowStatus(_text.NotificationsEnabled);
         }
     }
 
@@ -447,8 +524,8 @@ internal sealed class TrayAppContext : ApplicationContext
         _settings.MoveMinimizedWindows = _moveMinimizedItem.Checked;
         _settingsStore.Save(_settings);
         ShowStatus(_settings.MoveMinimizedWindows
-            ? "Свернутые окна будут переноситься."
-            : "Свернутые окна будут пропускаться.");
+            ? _text.MinimizedWillMove
+            : _text.MinimizedWillSkip);
     }
 
     private void TrackForegroundWindow(object? sender, EventArgs e)
@@ -543,9 +620,21 @@ internal sealed class TrayAppContext : ApplicationContext
             return;
         }
 
-        _notifyIcon.BalloonTipTitle = "Screen Switch";
+        _notifyIcon.BalloonTipTitle = _text.AppName;
         _notifyIcon.BalloonTipText = message;
         _notifyIcon.BalloonTipIcon = icon;
         _notifyIcon.ShowBalloonTip(2500);
+    }
+
+    private string LocalizeError(Exception ex)
+    {
+        return ex.Message switch
+        {
+            "Не удалось определить открытое активное окно для обмена." => _text.CouldNotFindActiveWindow,
+            "На другом мониторе нет подходящего открытого окна для обмена." => _text.NoWindowOnOtherMonitor,
+            "Приложение работает только когда подключено ровно два монитора." => _text.TwoMonitorsRequired,
+            "Не удалось открыть раздел автозапуска." => _text.StartupRegistryOpenFailed,
+            _ => ex.Message
+        };
     }
 }
