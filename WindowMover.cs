@@ -9,8 +9,10 @@ namespace ScreenSwitch;
 internal sealed class WindowMover
 {
     private const int DwmaCloaked = 14;
+    private const int DwmaExtendedFrameBounds = 9;
     private const int DefaultPlacementPoint = -1;
     private const int OffscreenCoordinateThreshold = -30000;
+    private const int MinimumVisibleIntersectionSize = 20;
     private const int PollIntervalMilliseconds = 30;
     private const ushort VirtualKeyEscape = 0x1B;
     private const ushort VirtualKeyF = 0x46;
@@ -33,11 +35,12 @@ internal sealed class WindowMover
         }
 
         if (TryGetWindowSnapshot(activeHandle, out var activeSnapshot, requireNonMinimized: true)
-            && TryGetTopWindowOnOtherMonitor(activeSnapshot, screens, out var liveSwapSnapshot)
+            && TryGetTargetScreen(activeSnapshot, screens, out var targetScreen)
+            && TryGetTopWindowOnOtherMonitor(activeSnapshot, targetScreen, out var liveSwapSnapshot, out var liveVisibleBounds)
             && TrySwapSnapshots(activeSnapshot, liveSwapSnapshot, screens))
         {
             DiagnosticLog.Info(
-                $"active swap candidate live hwnd={DiagnosticLog.FormatHandle(liveSwapSnapshot.Handle)} class={liveSwapSnapshot.ClassName} screen={liveSwapSnapshot.Screen.DeviceName}");
+                $"active swap candidate live-zorder hwnd={DiagnosticLog.FormatHandle(liveSwapSnapshot.Handle)} class={liveSwapSnapshot.ClassName} screen={liveSwapSnapshot.Screen.DeviceName} targetScreen={targetScreen.DeviceName} showCmd={liveSwapSnapshot.Placement.showCmd} current={FormatRectangle(liveSwapSnapshot.CurrentBounds)} visible={FormatRectangle(liveVisibleBounds)}");
             DiagnosticLog.Info($"action active completed moved=2 pending={_pendingFullscreenTransfers.Count}");
             return 2;
         }
@@ -45,17 +48,18 @@ internal sealed class WindowMover
         if (swapHandle != IntPtr.Zero
             && TryGetWindowSnapshot(activeHandle, out activeSnapshot, requireNonMinimized: true)
             && TryGetWindowSnapshot(swapHandle, out var cachedSwapSnapshot, requireNonMinimized: true)
-            && activeSnapshot.Screen.DeviceName != cachedSwapSnapshot.Screen.DeviceName
+            && TryGetTargetScreen(activeSnapshot, screens, out targetScreen)
+            && IsActiveSwapCandidate(cachedSwapSnapshot, activeSnapshot.Handle, targetScreen, out var cachedVisibleBounds)
             && TrySwapSnapshots(activeSnapshot, cachedSwapSnapshot, screens))
         {
             DiagnosticLog.Info(
-                $"active swap candidate fallback-cache hwnd={DiagnosticLog.FormatHandle(cachedSwapSnapshot.Handle)} class={cachedSwapSnapshot.ClassName} screen={cachedSwapSnapshot.Screen.DeviceName}");
+                $"active swap candidate fallback-cache hwnd={DiagnosticLog.FormatHandle(cachedSwapSnapshot.Handle)} class={cachedSwapSnapshot.ClassName} screen={cachedSwapSnapshot.Screen.DeviceName} targetScreen={targetScreen.DeviceName} showCmd={cachedSwapSnapshot.Placement.showCmd} current={FormatRectangle(cachedSwapSnapshot.CurrentBounds)} visible={FormatRectangle(cachedVisibleBounds)}");
             DiagnosticLog.Info($"action active completed moved=2 pending={_pendingFullscreenTransfers.Count}");
             return 2;
         }
 
         DiagnosticLog.Info(
-            $"active swap candidate missing active={DiagnosticLog.FormatHandle(activeHandle)} fallback={DiagnosticLog.FormatHandle(swapHandle)}");
+            $"active swap candidate missing active={DiagnosticLog.FormatHandle(activeHandle)} fallback={DiagnosticLog.FormatHandle(swapHandle)} reason=no-visible-window-on-target");
         throw new InvalidOperationException("На другом мониторе нет подходящего открытого окна для обмена.");
     }
 
@@ -72,16 +76,16 @@ internal sealed class WindowMover
         return false;
     }
 
-    public int MoveAllWindowsBetweenMonitors()
+    public int MoveAllWindowsBetweenMonitors(bool includeMinimizedWindows = true)
     {
-        DiagnosticLog.Info("action all");
+        DiagnosticLog.Info($"action all includeMinimized={includeMinimizedWindows}");
         var screens = GetTwoScreens();
         var originalForegroundWindow = NativeMethods.GetForegroundWindow();
         var moved = 0;
 
         NativeMethods.EnumWindows((handle, lParam) =>
         {
-            if (MoveSingleWindow(handle, screens, restoreFocus: false))
+            if (MoveSingleWindow(handle, screens, restoreFocus: false, includeMinimizedWindows))
             {
                 moved++;
             }
@@ -174,13 +178,13 @@ internal sealed class WindowMover
 
     private IntPtr GetPreferredWindowHandle(IntPtr preferredHandle, bool allowEnumerationFallback, bool requireNonMinimized)
     {
-        if (ShouldMoveWindow(preferredHandle) && (!requireNonMinimized || !IsMinimized(preferredHandle)))
+        if (ShouldMoveWindow(preferredHandle) && (!requireNonMinimized || !IsMinimizedOrOffscreen(preferredHandle)))
         {
             return preferredHandle;
         }
 
         var foregroundWindow = NativeMethods.GetForegroundWindow();
-        if (ShouldMoveWindow(foregroundWindow) && (!requireNonMinimized || !IsMinimized(foregroundWindow)))
+        if (ShouldMoveWindow(foregroundWindow) && (!requireNonMinimized || !IsMinimizedOrOffscreen(foregroundWindow)))
         {
             return foregroundWindow;
         }
@@ -193,7 +197,7 @@ internal sealed class WindowMover
         var fallback = IntPtr.Zero;
         NativeMethods.EnumWindows((handle, lParam) =>
         {
-            if (!ShouldMoveWindow(handle) || (requireNonMinimized && IsMinimized(handle)))
+            if (!ShouldMoveWindow(handle) || (requireNonMinimized && IsMinimizedOrOffscreen(handle)))
             {
                 return true;
             }
@@ -205,10 +209,17 @@ internal sealed class WindowMover
         return fallback;
     }
 
-    private bool MoveSingleWindow(IntPtr handle, Screen[] screens, bool restoreFocus)
+    private bool MoveSingleWindow(IntPtr handle, Screen[] screens, bool restoreFocus, bool includeMinimizedWindows = true)
     {
         if (!TryGetWindowSnapshot(handle, out var snapshot))
         {
+            return false;
+        }
+
+        if (!includeMinimizedWindows && IsMinimizedOrOffscreen(snapshot))
+        {
+            DiagnosticLog.Info(
+                $"skip minimized hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} class={snapshot.ClassName} current={FormatRectangle(snapshot.CurrentBounds)} normal={FormatRectangle(snapshot.NormalBounds)}");
             return false;
         }
 
@@ -233,36 +244,72 @@ internal sealed class WindowMover
 
     private bool TryGetTopWindowOnOtherMonitor(
         WindowSnapshot activeSnapshot,
-        Screen[] screens,
-        out WindowSnapshot swapSnapshot)
+        Screen targetScreen,
+        out WindowSnapshot swapSnapshot,
+        out Rectangle visibleBounds)
     {
         swapSnapshot = default;
+        visibleBounds = Rectangle.Empty;
         var foundSnapshot = default(WindowSnapshot);
+        var foundVisibleBounds = Rectangle.Empty;
 
         NativeMethods.EnumWindows((handle, lParam) =>
         {
-            if (handle == activeSnapshot.Handle)
-            {
-                return true;
-            }
-
             if (!TryGetWindowSnapshot(handle, out var candidate, requireNonMinimized: true))
             {
                 return true;
             }
 
-            if (screens.All(screen => screen.DeviceName != candidate.Screen.DeviceName)
-                || candidate.Screen.DeviceName == activeSnapshot.Screen.DeviceName)
+            if (!IsActiveSwapCandidate(candidate, activeSnapshot.Handle, targetScreen, out var candidateVisibleBounds))
             {
                 return true;
             }
 
             foundSnapshot = candidate;
+            foundVisibleBounds = candidateVisibleBounds;
             return false;
         }, IntPtr.Zero);
 
         swapSnapshot = foundSnapshot;
+        visibleBounds = foundVisibleBounds;
         return swapSnapshot.Handle != IntPtr.Zero;
+    }
+
+    private static bool TryGetTargetScreen(WindowSnapshot activeSnapshot, Screen[] screens, out Screen targetScreen)
+    {
+        targetScreen = null!;
+        if (screens.All(screen => screen.DeviceName != activeSnapshot.Screen.DeviceName))
+        {
+            return false;
+        }
+
+        targetScreen = screens.First(screen => screen.DeviceName != activeSnapshot.Screen.DeviceName);
+        return true;
+    }
+
+    private bool IsActiveSwapCandidate(
+        WindowSnapshot candidate,
+        IntPtr activeHandle,
+        Screen targetScreen,
+        out Rectangle visibleBounds)
+    {
+        visibleBounds = Rectangle.Empty;
+        if (candidate.Handle == activeHandle || IsMinimizedOrOffscreen(candidate) || IsMinimized(candidate.Handle))
+        {
+            return false;
+        }
+
+        if (!TryGetVisibleWindowBounds(candidate.Handle, out visibleBounds))
+        {
+            return false;
+        }
+
+        if (IsOffscreenLike(visibleBounds))
+        {
+            return false;
+        }
+
+        return HasMeaningfulIntersection(visibleBounds, targetScreen.Bounds);
     }
 
     private bool TrySwapSnapshots(WindowSnapshot activeSnapshot, WindowSnapshot swapSnapshot, Screen[] screens)
@@ -394,11 +441,6 @@ internal sealed class WindowMover
             return false;
         }
 
-        if (requireNonMinimized && placement.showCmd == NativeMethods.ShowWindowCommand.Minimize)
-        {
-            return false;
-        }
-
         var normalBounds = placement.rcNormalPosition.ToRectangle();
         if (normalBounds.Width <= 0 || normalBounds.Height <= 0)
         {
@@ -407,9 +449,17 @@ internal sealed class WindowMover
 
         NativeMethods.GetWindowThreadProcessId(handle, out var processId);
         var currentBounds = currentRect.ToRectangle();
+        var isOffscreenLike = IsOffscreenLike(currentBounds);
+        if (requireNonMinimized
+            && (placement.showCmd == NativeMethods.ShowWindowCommand.Minimize
+                || isOffscreenLike
+                || NativeMethods.IsIconic(handle)))
+        {
+            return false;
+        }
+
         var currentScreen = Screen.FromRectangle(currentBounds);
         var restoreScreen = Screen.FromRectangle(normalBounds);
-        var isOffscreenLike = IsOffscreenLike(currentBounds);
         var isFullScreenLike = !isOffscreenLike && CoversScreen(currentBounds, currentScreen.Bounds);
         var screen = isFullScreenLike || !isOffscreenLike ? currentScreen : restoreScreen;
         var className = GetClassName(handle);
@@ -420,6 +470,23 @@ internal sealed class WindowMover
     private static bool IsMinimized(IntPtr handle)
     {
         return NativeMethods.IsIconic(handle);
+    }
+
+    private static bool IsMinimizedOrOffscreen(IntPtr handle)
+    {
+        if (NativeMethods.IsIconic(handle))
+        {
+            return true;
+        }
+
+        if (NativeMethods.GetWindowPlacement(handle, out var placement)
+            && placement.showCmd == NativeMethods.ShowWindowCommand.Minimize)
+        {
+            return true;
+        }
+
+        return NativeMethods.GetWindowRect(handle, out var rect)
+            && IsOffscreenLike(rect.ToRectangle());
     }
 
     private bool ApplyMovement(
@@ -841,6 +908,12 @@ internal sealed class WindowMover
         };
     }
 
+    private static bool IsMinimizedOrOffscreen(WindowSnapshot snapshot)
+    {
+        return snapshot.IsOffscreenLike
+            || snapshot.Placement.showCmd == NativeMethods.ShowWindowCommand.Minimize;
+    }
+
     private void RememberPendingFullscreenTransfer(WindowSnapshot snapshot, Screen targetScreen, Rectangle targetBounds)
     {
         _pendingFullscreenTransfers.RemoveAll(pending => pending.Handle == snapshot.Handle);
@@ -876,6 +949,37 @@ internal sealed class WindowMover
             DwmaCloaked,
             out int cloaked,
             Marshal.SizeOf<int>()) == 0 && cloaked != 0;
+    }
+
+    private static bool TryGetVisibleWindowBounds(IntPtr handle, out Rectangle bounds)
+    {
+        bounds = Rectangle.Empty;
+        if (NativeMethods.DwmGetWindowAttribute(
+                handle,
+                DwmaExtendedFrameBounds,
+                out NativeMethods.RECT frameBounds,
+                Marshal.SizeOf<NativeMethods.RECT>()) == 0
+            && frameBounds.Width > 0
+            && frameBounds.Height > 0)
+        {
+            bounds = frameBounds.ToRectangle();
+            return true;
+        }
+
+        if (!NativeMethods.GetWindowRect(handle, out var rect) || rect.Width <= 0 || rect.Height <= 0)
+        {
+            return false;
+        }
+
+        bounds = rect.ToRectangle();
+        return true;
+    }
+
+    private static bool HasMeaningfulIntersection(Rectangle bounds, Rectangle screenBounds)
+    {
+        var intersection = Rectangle.Intersect(bounds, screenBounds);
+        return intersection.Width >= MinimumVisibleIntersectionSize
+            && intersection.Height >= MinimumVisibleIntersectionSize;
     }
 
     private static string GetClassName(IntPtr handle)

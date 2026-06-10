@@ -9,6 +9,7 @@ internal static class NativeMethods
     internal const long WsExToolWindow = 0x00000080L;
     internal const long WsExLayered = 0x00080000L;
     internal const uint LwaAlpha = 0x00000002;
+    internal const int WmHotKey = 0x0312;
 
     internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -67,6 +68,15 @@ internal static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool RegisterHotKey(IntPtr hWnd, int id, HotkeyModifiers fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    [DllImport("user32.dll")]
+    internal static extern short GetKeyState(int nVirtKey);
+
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
     internal static extern IntPtr GetWindowLongPtr(IntPtr hWnd, WindowLongIndex nIndex);
 
@@ -92,6 +102,13 @@ internal static class NativeMethods
         IntPtr hwnd,
         int dwAttribute,
         out int pvAttribute,
+        int cbAttribute);
+
+    [DllImport("dwmapi.dll")]
+    internal static extern int DwmGetWindowAttribute(
+        IntPtr hwnd,
+        int dwAttribute,
+        out RECT pvAttribute,
         int cbAttribute);
 
     internal enum GetWindowCommand : uint
@@ -130,6 +147,17 @@ internal static class NativeMethods
     internal enum KeyboardEventFlags : uint
     {
         KeyUp = 0x0002
+    }
+
+    [Flags]
+    internal enum HotkeyModifiers : uint
+    {
+        None = 0,
+        Alt = 0x0001,
+        Control = 0x0002,
+        Shift = 0x0004,
+        Win = 0x0008,
+        NoRepeat = 0x4000
     }
 
     [StructLayout(LayoutKind.Sequential)]
