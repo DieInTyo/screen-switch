@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
@@ -8,10 +9,22 @@ namespace ScreenSwitch;
 internal sealed class WindowMover
 {
     private const int DwmaCloaked = 14;
+    private const int DefaultPlacementPoint = -1;
+    private const int OffscreenCoordinateThreshold = -30000;
+    private const int PollIntervalMilliseconds = 30;
+    private const ushort VirtualKeyEscape = 0x1B;
+    private const ushort VirtualKeyF = 0x46;
+    private static readonly TimeSpan PendingFullscreenTransferTtl = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan FullScreenInputTimeout = TimeSpan.FromMilliseconds(900);
+    private static readonly TimeSpan MinimizedRestoreTimeout = TimeSpan.FromMilliseconds(700);
     private readonly int _currentProcessId = Environment.ProcessId;
+    private readonly List<PendingFullscreenTransfer> _pendingFullscreenTransfers = new();
+
+    public bool HasPendingFullscreenTransfers => _pendingFullscreenTransfers.Count > 0;
 
     public int MoveActiveWindowBetweenMonitors(IntPtr preferredHandle = default, IntPtr swapHandle = default)
     {
+        DiagnosticLog.Info("action active");
         var screens = GetTwoScreens();
         var activeHandle = GetPreferredWindowHandle(preferredHandle, allowEnumerationFallback: false, requireNonMinimized: true);
         if (activeHandle == IntPtr.Zero)
@@ -21,6 +34,7 @@ internal sealed class WindowMover
 
         if (TrySwapWindows(activeHandle, swapHandle, screens))
         {
+            DiagnosticLog.Info($"action active completed moved=2 pending={_pendingFullscreenTransfers.Count}");
             return 2;
         }
 
@@ -42,10 +56,12 @@ internal sealed class WindowMover
 
     public int MoveAllWindowsBetweenMonitors()
     {
+        DiagnosticLog.Info("action all");
         var screens = GetTwoScreens();
+        var originalForegroundWindow = NativeMethods.GetForegroundWindow();
         var moved = 0;
 
-        NativeMethods.EnumWindows((handle, _) =>
+        NativeMethods.EnumWindows((handle, lParam) =>
         {
             if (MoveSingleWindow(handle, screens, restoreFocus: false))
             {
@@ -55,7 +71,72 @@ internal sealed class WindowMover
             return true;
         }, IntPtr.Zero);
 
+        RestoreForegroundWindow(originalForegroundWindow);
+        DiagnosticLog.Info($"action all completed moved={moved} pending={_pendingFullscreenTransfers.Count}");
         return moved;
+    }
+
+    public void ProcessPendingFullscreenTransfers()
+    {
+        if (_pendingFullscreenTransfers.Count == 0)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var screens = Screen.AllScreens;
+
+        for (var index = _pendingFullscreenTransfers.Count - 1; index >= 0; index--)
+        {
+            var pending = _pendingFullscreenTransfers[index];
+            if (now - pending.CreatedAt > PendingFullscreenTransferTtl)
+            {
+                DiagnosticLog.Info($"pending expired hwnd={DiagnosticLog.FormatHandle(pending.Handle)} target={pending.TargetScreenDeviceName}");
+                _pendingFullscreenTransfers.RemoveAt(index);
+                continue;
+            }
+
+            if (!NativeMethods.IsWindow(pending.Handle))
+            {
+                DiagnosticLog.Info($"pending removed missing-window hwnd={DiagnosticLog.FormatHandle(pending.Handle)}");
+                _pendingFullscreenTransfers.RemoveAt(index);
+                continue;
+            }
+
+            NativeMethods.GetWindowThreadProcessId(pending.Handle, out var processId);
+            if (processId != pending.ProcessId)
+            {
+                DiagnosticLog.Info($"pending removed process-changed hwnd={DiagnosticLog.FormatHandle(pending.Handle)} oldPid={pending.ProcessId} newPid={processId}");
+                _pendingFullscreenTransfers.RemoveAt(index);
+                continue;
+            }
+
+            if (!TryGetWindowSnapshot(pending.Handle, out var snapshot))
+            {
+                continue;
+            }
+
+            if (snapshot.IsFullScreenLike)
+            {
+                continue;
+            }
+
+            var targetScreen = screens.FirstOrDefault(screen => screen.DeviceName == pending.TargetScreenDeviceName);
+            if (targetScreen is null)
+            {
+                DiagnosticLog.Info($"pending removed missing-target hwnd={DiagnosticLog.FormatHandle(pending.Handle)} target={pending.TargetScreenDeviceName}");
+                _pendingFullscreenTransfers.RemoveAt(index);
+                continue;
+            }
+
+            if (ApplyMovement(snapshot, pending.TargetRestoreBounds, targetScreen, resetPlacementPoints: true, isPendingCorrection: true))
+            {
+                var elapsedMs = (long)(DateTimeOffset.UtcNow - pending.CreatedAt).TotalMilliseconds;
+                DiagnosticLog.Info(
+                    $"pending corrected hwnd={DiagnosticLog.FormatHandle(pending.Handle)} pid={pending.ProcessId} from={snapshot.Screen.DeviceName} target={targetScreen.DeviceName} showCmd={snapshot.Placement.showCmd} current={FormatRectangle(snapshot.CurrentBounds)} normal={FormatRectangle(snapshot.NormalBounds)} targetBounds={FormatRectangle(pending.TargetRestoreBounds)} elapsedMs={elapsedMs}");
+                _pendingFullscreenTransfers.RemoveAt(index);
+            }
+        }
     }
 
     private Screen[] GetTwoScreens()
@@ -92,7 +173,7 @@ internal sealed class WindowMover
         }
 
         var fallback = IntPtr.Zero;
-        NativeMethods.EnumWindows((handle, _) =>
+        NativeMethods.EnumWindows((handle, lParam) =>
         {
             if (!ShouldMoveWindow(handle) || (requireNonMinimized && IsMinimized(handle)))
             {
@@ -119,9 +200,7 @@ internal sealed class WindowMover
         }
 
         var targetScreen = screens[0].DeviceName == snapshot.Screen.DeviceName ? screens[1] : screens[0];
-        var targetBounds = MapBounds(snapshot.NormalBounds, snapshot.Screen.WorkingArea, targetScreen.WorkingArea);
-
-        if (!ApplyPlacement(snapshot.Handle, snapshot.Placement, targetBounds))
+        if (!MoveSnapshotToScreen(snapshot, targetScreen))
         {
             return false;
         }
@@ -162,26 +241,43 @@ internal sealed class WindowMover
             return false;
         }
 
-        var activeTargetBounds = MapBounds(
-            activeSnapshot.NormalBounds,
-            activeSnapshot.Screen.WorkingArea,
-            swapSnapshot.Screen.WorkingArea);
-        var swapTargetBounds = MapBounds(
-            swapSnapshot.NormalBounds,
-            swapSnapshot.Screen.WorkingArea,
-            activeSnapshot.Screen.WorkingArea);
-
-        if (!ApplyPlacement(swapSnapshot.Handle, swapSnapshot.Placement, swapTargetBounds))
+        if (!MoveSnapshotToScreen(swapSnapshot, activeSnapshot.Screen))
         {
             return false;
         }
 
-        if (!ApplyPlacement(activeSnapshot.Handle, activeSnapshot.Placement, activeTargetBounds))
+        if (!MoveSnapshotToScreen(activeSnapshot, swapSnapshot.Screen))
         {
             return false;
         }
 
         NativeMethods.SetForegroundWindow(activeSnapshot.Handle);
+        return true;
+    }
+
+    private bool MoveSnapshotToScreen(WindowSnapshot snapshot, Screen targetScreen)
+    {
+        var targetBounds = MapBounds(snapshot.NormalBounds, snapshot.RestoreScreen.WorkingArea, targetScreen.WorkingArea);
+        DiagnosticLog.Info(
+            $"move hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} pid={snapshot.ProcessId} class={snapshot.ClassName} current={FormatRectangle(snapshot.CurrentBounds)} normal={FormatRectangle(snapshot.NormalBounds)} source={snapshot.Screen.DeviceName} restore={snapshot.RestoreScreen.DeviceName} target={targetScreen.DeviceName} fullscreen={snapshot.IsFullScreenLike} offscreen={snapshot.IsOffscreenLike}");
+
+        if (TryControlledBrowserFullScreenTransfer(snapshot, targetScreen, targetBounds))
+        {
+            return true;
+        }
+
+        if (!ApplyMovement(snapshot, targetBounds, targetScreen))
+        {
+            return false;
+        }
+
+        if (snapshot.IsFullScreenLike)
+        {
+            DiagnosticLog.Info(
+                $"fullscreen transfer fallback=pending hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} class={snapshot.ClassName}");
+            RememberPendingFullscreenTransfer(snapshot, targetScreen, targetBounds);
+        }
+
         return true;
     }
 
@@ -234,7 +330,10 @@ internal sealed class WindowMover
         return true;
     }
 
-    private bool TryGetWindowSnapshot(IntPtr handle, out WindowSnapshot snapshot, bool requireNonMinimized = false)
+    private bool TryGetWindowSnapshot(
+        IntPtr handle,
+        out WindowSnapshot snapshot,
+        bool requireNonMinimized = false)
     {
         snapshot = default;
 
@@ -244,6 +343,11 @@ internal sealed class WindowMover
         }
 
         if (!NativeMethods.GetWindowPlacement(handle, out var placement))
+        {
+            return false;
+        }
+
+        if (!NativeMethods.GetWindowRect(handle, out var currentRect))
         {
             return false;
         }
@@ -259,8 +363,15 @@ internal sealed class WindowMover
             return false;
         }
 
-        var screen = Screen.FromRectangle(normalBounds);
-        snapshot = new WindowSnapshot(handle, placement, normalBounds, screen);
+        NativeMethods.GetWindowThreadProcessId(handle, out var processId);
+        var currentBounds = currentRect.ToRectangle();
+        var currentScreen = Screen.FromRectangle(currentBounds);
+        var restoreScreen = Screen.FromRectangle(normalBounds);
+        var isOffscreenLike = IsOffscreenLike(currentBounds);
+        var isFullScreenLike = !isOffscreenLike && CoversScreen(currentBounds, currentScreen.Bounds);
+        var screen = isFullScreenLike || !isOffscreenLike ? currentScreen : restoreScreen;
+        var className = GetClassName(handle);
+        snapshot = new WindowSnapshot(handle, placement, normalBounds, currentBounds, screen, restoreScreen, isFullScreenLike, isOffscreenLike, processId, className);
         return true;
     }
 
@@ -269,27 +380,451 @@ internal sealed class WindowMover
         return NativeMethods.IsIconic(handle);
     }
 
-    private bool ApplyPlacement(
-        IntPtr handle,
-        NativeMethods.WINDOWPLACEMENT placement,
-        Rectangle targetBounds)
+    private bool ApplyMovement(
+        WindowSnapshot snapshot,
+        Rectangle targetBounds,
+        Screen targetScreen,
+        bool resetPlacementPoints = false,
+        bool isPendingCorrection = false,
+        bool isControlledFullScreenTransfer = false)
     {
+        var placement = snapshot.Placement;
         placement.length = Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
         placement.rcNormalPosition = NativeMethods.RECT.FromRectangle(targetBounds);
+        if (resetPlacementPoints)
+        {
+            ResetPlacementPoints(ref placement);
+        }
 
-        if (!NativeMethods.SetWindowPlacement(handle, ref placement))
+        var mode = GetMovementMode(snapshot, isPendingCorrection);
+        var applied = mode switch
+        {
+            MovementMode.Offscreen => ApplyMinimizedOrOffscreenMovement(snapshot, placement, targetBounds, targetScreen),
+            MovementMode.Minimized => ApplyMinimizedOrOffscreenMovement(snapshot, placement, targetBounds, targetScreen),
+            MovementMode.Maximized => ApplyMaximizedMovement(snapshot.Handle, placement, targetBounds),
+            MovementMode.FullScreenLike => ApplyFullScreenMovement(snapshot.Handle, placement, targetScreen.Bounds),
+            _ => ApplyNormalMovement(snapshot.Handle, placement, targetBounds)
+        };
+
+        DiagnosticLog.Info(
+            $"move applied hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} mode={mode.ToString().ToLowerInvariant()} ok={applied} targetBounds={FormatRectangle(targetBounds)} controlledFullscreen={isControlledFullScreenTransfer}");
+
+        return applied;
+    }
+
+    private bool TryControlledBrowserFullScreenTransfer(WindowSnapshot snapshot, Screen targetScreen, Rectangle targetBounds)
+    {
+        if (!snapshot.IsFullScreenLike || !IsChromiumBrowserWindow(snapshot.ClassName))
         {
             return false;
         }
 
-        if (placement.showCmd == NativeMethods.ShowWindowCommand.Maximize)
+        var stopwatch = Stopwatch.StartNew();
+        DiagnosticLog.Info(
+            $"fullscreen input begin hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} class={snapshot.ClassName} target={targetScreen.DeviceName}");
+
+        NativeMethods.SetForegroundWindow(snapshot.Handle);
+        if (!WaitForForegroundWindow(snapshot.Handle, TimeSpan.FromMilliseconds(350)))
         {
-            NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Restore);
-            NativeMethods.SetWindowPlacement(handle, ref placement);
-            NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Maximize);
+            DiagnosticLog.Info(
+                $"fullscreen input foreground-timeout hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} elapsedMs={stopwatch.ElapsedMilliseconds}");
+        }
+
+        if (!SendVirtualKey(VirtualKeyEscape))
+        {
+            DiagnosticLog.Info(
+                $"fullscreen input failed=esc-send hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} elapsedMs={stopwatch.ElapsedMilliseconds}");
+            return false;
+        }
+
+        if (!WaitForSnapshot(
+            snapshot.Handle,
+            current => !current.IsFullScreenLike && !current.IsOffscreenLike,
+            FullScreenInputTimeout,
+            out var restoredSnapshot))
+        {
+            DiagnosticLog.Info(
+                $"fullscreen input failed=esc-timeout hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} elapsedMs={stopwatch.ElapsedMilliseconds}");
+            return false;
+        }
+
+        DiagnosticLog.Info(
+            $"fullscreen input exited hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} showCmd={restoredSnapshot.Placement.showCmd} current={FormatRectangle(restoredSnapshot.CurrentBounds)} normal={FormatRectangle(restoredSnapshot.NormalBounds)} elapsedMs={stopwatch.ElapsedMilliseconds}");
+
+        if (!ApplyMovement(restoredSnapshot, targetBounds, targetScreen, isControlledFullScreenTransfer: true))
+        {
+            DiagnosticLog.Info(
+                $"fullscreen input failed=move hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} elapsedMs={stopwatch.ElapsedMilliseconds}");
+            return false;
+        }
+
+        NativeMethods.SetForegroundWindow(snapshot.Handle);
+        if (!WaitForForegroundWindow(snapshot.Handle, TimeSpan.FromMilliseconds(350)))
+        {
+            DiagnosticLog.Info(
+                $"fullscreen input foreground-timeout-after-move hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} elapsedMs={stopwatch.ElapsedMilliseconds}");
+        }
+
+        if (!SendVirtualKey(VirtualKeyF))
+        {
+            DiagnosticLog.Info(
+                $"fullscreen input failed=f-send hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} elapsedMs={stopwatch.ElapsedMilliseconds}");
+            return true;
+        }
+
+        if (WaitForSnapshot(
+            snapshot.Handle,
+            current => current.IsFullScreenLike && current.Screen.DeviceName == targetScreen.DeviceName,
+            FullScreenInputTimeout,
+            out var fullscreenSnapshot))
+        {
+            DiagnosticLog.Info(
+                $"fullscreen input reentered hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} current={FormatRectangle(fullscreenSnapshot.CurrentBounds)} elapsedMs={stopwatch.ElapsedMilliseconds}");
+        }
+        else
+        {
+            DiagnosticLog.Info(
+                $"fullscreen input failed=f-timeout hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} elapsedMs={stopwatch.ElapsedMilliseconds}");
         }
 
         return true;
+    }
+
+    private bool ApplyMinimizedOrOffscreenMovement(
+        WindowSnapshot snapshot,
+        NativeMethods.WINDOWPLACEMENT placement,
+        Rectangle targetBounds,
+        Screen targetScreen)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        DiagnosticLog.Info(
+            $"minimized invisible begin hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} current={FormatRectangle(snapshot.CurrentBounds)} normal={FormatRectangle(snapshot.NormalBounds)} targetBounds={FormatRectangle(targetBounds)}");
+
+        var invisible = TryMakeWindowInvisible(snapshot.Handle);
+        if (!invisible.Enabled)
+        {
+            DiagnosticLog.Info(
+                $"minimized invisible failed=enable hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)}");
+        }
+
+        NativeMethods.ShowWindow(snapshot.Handle, NativeMethods.ShowWindowCommand.Restore);
+
+        if (!WaitForSnapshot(
+            snapshot.Handle,
+            current => !current.IsOffscreenLike && !current.IsFullScreenLike,
+            MinimizedRestoreTimeout,
+            out var restoredSnapshot))
+        {
+            NativeMethods.ShowWindow(snapshot.Handle, NativeMethods.ShowWindowCommand.Minimize);
+            RestoreWindowVisibility(snapshot.Handle, invisible);
+            DiagnosticLog.Info(
+                $"minimized invisible failed=restore-timeout hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} elapsedMs={stopwatch.ElapsedMilliseconds}");
+            return false;
+        }
+
+        DiagnosticLog.Info(
+            $"minimized invisible restored hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} showCmd={restoredSnapshot.Placement.showCmd} current={FormatRectangle(restoredSnapshot.CurrentBounds)} elapsedMs={stopwatch.ElapsedMilliseconds}");
+
+        var restoredPlacement = restoredSnapshot.Placement;
+        restoredPlacement.length = Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
+        restoredPlacement.rcNormalPosition = NativeMethods.RECT.FromRectangle(targetBounds);
+
+        var moved = restoredSnapshot.Placement.showCmd == NativeMethods.ShowWindowCommand.Maximize
+            ? ApplyMaximizedMovement(restoredSnapshot.Handle, restoredPlacement, targetBounds)
+            : ApplyNormalMovement(restoredSnapshot.Handle, restoredPlacement, targetBounds);
+
+        NativeMethods.ShowWindow(snapshot.Handle, NativeMethods.ShowWindowCommand.Minimize);
+        RestoreWindowVisibility(snapshot.Handle, invisible);
+        DiagnosticLog.Info(
+            $"minimized invisible minimized hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} ok={moved} elapsedMs={stopwatch.ElapsedMilliseconds}");
+
+        return moved;
+    }
+
+    private bool ApplyNormalMovement(
+        IntPtr handle,
+        NativeMethods.WINDOWPLACEMENT placement,
+        Rectangle targetBounds)
+    {
+        if (!SetWindowPosition(handle, targetBounds))
+        {
+            return false;
+        }
+
+        return SetRestorePlacement(handle, placement);
+    }
+
+    private bool ApplyMaximizedMovement(
+        IntPtr handle,
+        NativeMethods.WINDOWPLACEMENT placement,
+        Rectangle targetBounds)
+    {
+        NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Restore);
+
+        if (!SetWindowPosition(handle, targetBounds))
+        {
+            return false;
+        }
+
+        placement.showCmd = NativeMethods.ShowWindowCommand.Normal;
+        if (!SetRestorePlacement(handle, placement))
+        {
+            return false;
+        }
+
+        NativeMethods.ShowWindow(handle, NativeMethods.ShowWindowCommand.Maximize);
+        return true;
+    }
+
+    private bool ApplyFullScreenMovement(
+        IntPtr handle,
+        NativeMethods.WINDOWPLACEMENT placement,
+        Rectangle targetScreenBounds)
+    {
+        if (!SetRestorePlacement(handle, placement))
+        {
+            return false;
+        }
+
+        return SetWindowPosition(handle, targetScreenBounds);
+    }
+
+    private bool SetWindowPosition(IntPtr handle, Rectangle bounds)
+    {
+        if (NativeMethods.SetWindowPos(
+            handle,
+            IntPtr.Zero,
+            bounds.Left,
+            bounds.Top,
+            bounds.Width,
+            bounds.Height,
+            NativeMethods.SetWindowPosFlags.NoZOrder
+            | NativeMethods.SetWindowPosFlags.NoActivate
+            | NativeMethods.SetWindowPosFlags.ShowWindow))
+        {
+            return true;
+        }
+
+        DiagnosticLog.Win32Failure("SetWindowPos", handle);
+        return false;
+    }
+
+    private bool SetRestorePlacement(IntPtr handle, NativeMethods.WINDOWPLACEMENT placement)
+    {
+        placement.length = Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>();
+        if (NativeMethods.SetWindowPlacement(handle, ref placement))
+        {
+            return true;
+        }
+
+        DiagnosticLog.Win32Failure("SetWindowPlacement", handle);
+        return false;
+    }
+
+    private bool WaitForSnapshot(
+        IntPtr handle,
+        Func<WindowSnapshot, bool> predicate,
+        TimeSpan timeout,
+        out WindowSnapshot snapshot)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        do
+        {
+            if (TryGetWindowSnapshot(handle, out snapshot) && predicate(snapshot))
+            {
+                return true;
+            }
+
+            Thread.Sleep(PollIntervalMilliseconds);
+        }
+        while (DateTimeOffset.UtcNow < deadline);
+
+        snapshot = default;
+        return false;
+    }
+
+    private static bool WaitForForegroundWindow(IntPtr handle, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        do
+        {
+            if (NativeMethods.GetForegroundWindow() == handle)
+            {
+                return true;
+            }
+
+            Thread.Sleep(PollIntervalMilliseconds);
+        }
+        while (DateTimeOffset.UtcNow < deadline);
+
+        return NativeMethods.GetForegroundWindow() == handle;
+    }
+
+    private static bool SendVirtualKey(ushort virtualKey)
+    {
+        var inputs = new[]
+        {
+            CreateKeyboardInput(virtualKey, 0),
+            CreateKeyboardInput(virtualKey, NativeMethods.KeyboardEventFlags.KeyUp)
+        };
+
+        var sent = NativeMethods.SendInput(
+            (uint)inputs.Length,
+            inputs,
+            Marshal.SizeOf<NativeMethods.INPUT>());
+        if (sent == inputs.Length)
+        {
+            return true;
+        }
+
+        DiagnosticLog.Info(
+            $"SendInput failed vk=0x{virtualKey:X2} size={Marshal.SizeOf<NativeMethods.INPUT>()} sent={sent} error={Marshal.GetLastWin32Error()}");
+        return false;
+    }
+
+    private static NativeMethods.INPUT CreateKeyboardInput(
+        ushort virtualKey,
+        NativeMethods.KeyboardEventFlags flags)
+    {
+        return new NativeMethods.INPUT
+        {
+            type = NativeMethods.InputType.Keyboard,
+            union = new NativeMethods.INPUTUNION
+            {
+                keyboardInput = new NativeMethods.KEYBDINPUT
+                {
+                    wVk = virtualKey,
+                    dwFlags = flags
+                }
+            }
+        };
+    }
+
+    private static void RestoreForegroundWindow(IntPtr handle)
+    {
+        if (handle != IntPtr.Zero && NativeMethods.IsWindow(handle))
+        {
+            NativeMethods.SetForegroundWindow(handle);
+        }
+    }
+
+    private static InvisibleWindowState TryMakeWindowInvisible(IntPtr handle)
+    {
+        var originalStyle = NativeMethods.GetWindowLongPtr(handle, NativeMethods.WindowLongIndex.ExStyle);
+        var originalStyleValue = originalStyle.ToInt64();
+        var wasLayered = (originalStyleValue & NativeMethods.WsExLayered) != 0;
+        var hadLayeredAttributes = false;
+        uint originalColorKey = 0;
+        byte originalAlpha = 255;
+        uint originalLayeredFlags = NativeMethods.LwaAlpha;
+
+        if (wasLayered)
+        {
+            hadLayeredAttributes = NativeMethods.GetLayeredWindowAttributes(
+                handle,
+                out originalColorKey,
+                out originalAlpha,
+                out originalLayeredFlags);
+        }
+
+        if (!wasLayered)
+        {
+            var newStyle = new IntPtr(originalStyleValue | NativeMethods.WsExLayered);
+            NativeMethods.SetWindowLongPtr(handle, NativeMethods.WindowLongIndex.ExStyle, newStyle);
+            var styleAfterSet = NativeMethods.GetWindowLongPtr(handle, NativeMethods.WindowLongIndex.ExStyle).ToInt64();
+            if ((styleAfterSet & NativeMethods.WsExLayered) == 0)
+            {
+                DiagnosticLog.Win32Failure("SetWindowLongPtr WS_EX_LAYERED", handle);
+                return new InvisibleWindowState(originalStyle, wasLayered, hadLayeredAttributes, originalColorKey, originalAlpha, originalLayeredFlags, false);
+            }
+        }
+
+        if (!NativeMethods.SetLayeredWindowAttributes(handle, 0, 0, NativeMethods.LwaAlpha))
+        {
+            DiagnosticLog.Win32Failure("SetLayeredWindowAttributes alpha=0", handle);
+            RestoreWindowVisibility(handle, new InvisibleWindowState(originalStyle, wasLayered, hadLayeredAttributes, originalColorKey, originalAlpha, originalLayeredFlags, true));
+            return new InvisibleWindowState(originalStyle, wasLayered, hadLayeredAttributes, originalColorKey, originalAlpha, originalLayeredFlags, false);
+        }
+
+        return new InvisibleWindowState(originalStyle, wasLayered, hadLayeredAttributes, originalColorKey, originalAlpha, originalLayeredFlags, true);
+    }
+
+    private static void RestoreWindowVisibility(IntPtr handle, InvisibleWindowState state)
+    {
+        if (!state.Enabled)
+        {
+            return;
+        }
+
+        if (state.WasLayered)
+        {
+            if (state.HadLayeredAttributes)
+            {
+                NativeMethods.SetLayeredWindowAttributes(
+                    handle,
+                    state.OriginalColorKey,
+                    state.OriginalAlpha,
+                    state.OriginalLayeredFlags);
+            }
+            else
+            {
+                NativeMethods.SetLayeredWindowAttributes(handle, 0, 255, NativeMethods.LwaAlpha);
+            }
+        }
+        else
+        {
+            NativeMethods.SetWindowLongPtr(handle, NativeMethods.WindowLongIndex.ExStyle, state.OriginalExtendedStyle);
+        }
+
+        DiagnosticLog.Info($"minimized invisible restored-style hwnd={DiagnosticLog.FormatHandle(handle)}");
+    }
+
+    private static MovementMode GetMovementMode(WindowSnapshot snapshot, bool isPendingCorrection)
+    {
+        if (snapshot.IsFullScreenLike && !isPendingCorrection)
+        {
+            return MovementMode.FullScreenLike;
+        }
+
+        if (snapshot.IsOffscreenLike)
+        {
+            return MovementMode.Offscreen;
+        }
+
+        return snapshot.Placement.showCmd switch
+        {
+            NativeMethods.ShowWindowCommand.Minimize => MovementMode.Minimized,
+            NativeMethods.ShowWindowCommand.Maximize => MovementMode.Maximized,
+            _ => MovementMode.Normal
+        };
+    }
+
+    private void RememberPendingFullscreenTransfer(WindowSnapshot snapshot, Screen targetScreen, Rectangle targetBounds)
+    {
+        _pendingFullscreenTransfers.RemoveAll(pending => pending.Handle == snapshot.Handle);
+        _pendingFullscreenTransfers.Add(new PendingFullscreenTransfer(
+            snapshot.Handle,
+            snapshot.ProcessId,
+            targetScreen.DeviceName,
+            targetBounds,
+            DateTimeOffset.UtcNow));
+
+        DiagnosticLog.Info(
+            $"pending created hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} pid={snapshot.ProcessId} target={targetScreen.DeviceName} bounds={FormatRectangle(targetBounds)}");
+    }
+
+    private static void ResetPlacementPoints(ref NativeMethods.WINDOWPLACEMENT placement)
+    {
+        placement.ptMinPosition = new NativeMethods.POINT
+        {
+            X = DefaultPlacementPoint,
+            Y = DefaultPlacementPoint
+        };
+        placement.ptMaxPosition = new NativeMethods.POINT
+        {
+            X = DefaultPlacementPoint,
+            Y = DefaultPlacementPoint
+        };
     }
 
     private bool IsCloaked(IntPtr handle)
@@ -299,6 +834,30 @@ internal sealed class WindowMover
             DwmaCloaked,
             out int cloaked,
             Marshal.SizeOf<int>()) == 0 && cloaked != 0;
+    }
+
+    private static string GetClassName(IntPtr handle)
+    {
+        var className = new StringBuilder(256);
+        _ = NativeMethods.GetClassName(handle, className, className.Capacity);
+        return className.ToString();
+    }
+
+    private static string FormatRectangle(Rectangle rectangle)
+    {
+        return $"{rectangle.Left},{rectangle.Top},{rectangle.Width}x{rectangle.Height}";
+    }
+
+    private static bool IsChromiumBrowserWindow(string className)
+    {
+        return className.Contains("Chrome_", StringComparison.Ordinal)
+            && className.Contains("WidgetWin", StringComparison.Ordinal);
+    }
+
+    private static bool IsOffscreenLike(Rectangle rectangle)
+    {
+        return rectangle.Left <= OffscreenCoordinateThreshold
+            || rectangle.Top <= OffscreenCoordinateThreshold;
     }
 
     private static Rectangle MapBounds(Rectangle windowBounds, Rectangle sourceArea, Rectangle targetArea)
@@ -325,11 +884,52 @@ internal sealed class WindowMover
         return new Rectangle(targetLeft, targetTop, targetWidth, targetHeight);
     }
 
+    private static bool CoversScreen(Rectangle windowBounds, Rectangle screenBounds)
+    {
+        const int Tolerance = 2;
+
+        return windowBounds.Left <= screenBounds.Left + Tolerance
+            && windowBounds.Top <= screenBounds.Top + Tolerance
+            && windowBounds.Right >= screenBounds.Right - Tolerance
+            && windowBounds.Bottom >= screenBounds.Bottom - Tolerance;
+    }
+
     private readonly record struct WindowSnapshot(
         IntPtr Handle,
         NativeMethods.WINDOWPLACEMENT Placement,
         Rectangle NormalBounds,
-        Screen Screen);
+        Rectangle CurrentBounds,
+        Screen Screen,
+        Screen RestoreScreen,
+        bool IsFullScreenLike,
+        bool IsOffscreenLike,
+        int ProcessId,
+        string ClassName);
+
+    private readonly record struct PendingFullscreenTransfer(
+        IntPtr Handle,
+        int ProcessId,
+        string TargetScreenDeviceName,
+        Rectangle TargetRestoreBounds,
+        DateTimeOffset CreatedAt);
+
+    private readonly record struct InvisibleWindowState(
+        IntPtr OriginalExtendedStyle,
+        bool WasLayered,
+        bool HadLayeredAttributes,
+        uint OriginalColorKey,
+        byte OriginalAlpha,
+        uint OriginalLayeredFlags,
+        bool Enabled);
+
+    private enum MovementMode
+    {
+        Normal,
+        Maximized,
+        Minimized,
+        Offscreen,
+        FullScreenLike
+    }
 }
 
 internal readonly record struct TrackedWindow(IntPtr Handle, string ScreenDeviceName);

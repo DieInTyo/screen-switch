@@ -5,6 +5,8 @@ namespace ScreenSwitch;
 
 internal sealed class TrayAppContext : ApplicationContext
 {
+    private const int NormalTrackerInterval = 250;
+    private const int PendingTrackerInterval = 40;
     private readonly NotifyIcon _notifyIcon;
     private readonly SettingsStore _settingsStore;
     private readonly StartupManager _startupManager;
@@ -20,6 +22,7 @@ internal sealed class TrayAppContext : ApplicationContext
 
     public TrayAppContext()
     {
+        DiagnosticLog.Start();
         _settingsStore = new SettingsStore();
         _startupManager = new StartupManager();
         _settings = _settingsStore.Load();
@@ -71,7 +74,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _notifyIcon.MouseClick += NotifyIconOnMouseClick;
         _foregroundTracker = new System.Windows.Forms.Timer
         {
-            Interval = 250
+            Interval = NormalTrackerInterval
         };
         _foregroundTracker.Tick += TrackForegroundWindow;
         _foregroundTracker.Start();
@@ -117,6 +120,7 @@ internal sealed class TrayAppContext : ApplicationContext
             }
 
             var movedCount = _windowMover.MoveActiveWindowBetweenMonitors(_lastTrackedWindow.Handle, otherMonitorWindow.Handle);
+            UpdateTrackerInterval();
 
             if (movedCount >= 2)
             {
@@ -129,6 +133,7 @@ internal sealed class TrayAppContext : ApplicationContext
         }
         catch (Exception ex)
         {
+            UpdateTrackerInterval();
             ShowStatus(ex.Message, ToolTipIcon.Warning);
         }
     }
@@ -145,10 +150,12 @@ internal sealed class TrayAppContext : ApplicationContext
         try
         {
             var movedCount = action();
+            UpdateTrackerInterval();
             ShowStatus(successMessageFactory(movedCount));
         }
         catch (Exception ex)
         {
+            UpdateTrackerInterval();
             ShowStatus(ex.Message, ToolTipIcon.Warning);
         }
     }
@@ -201,11 +208,34 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private void TrackForegroundWindow(object? sender, EventArgs e)
     {
+        try
+        {
+            _windowMover.ProcessPendingFullscreenTransfers();
+            UpdateTrackerInterval();
+        }
+        catch (Exception ex)
+        {
+            UpdateTrackerInterval();
+            DiagnosticLog.Info($"pending check failed {ex.GetType().Name}: {ex.Message}");
+        }
+
         if (_windowMover.TryGetMovableForegroundWindow(out var trackedWindow))
         {
             RemoveHandleFromMonitorCache(trackedWindow.Handle);
             _lastTrackedWindow = trackedWindow;
             _lastWindowByMonitor[trackedWindow.ScreenDeviceName] = trackedWindow.Handle;
+        }
+    }
+
+    private void UpdateTrackerInterval()
+    {
+        var targetInterval = _windowMover.HasPendingFullscreenTransfers
+            ? PendingTrackerInterval
+            : NormalTrackerInterval;
+
+        if (_foregroundTracker.Interval != targetInterval)
+        {
+            _foregroundTracker.Interval = targetInterval;
         }
     }
 

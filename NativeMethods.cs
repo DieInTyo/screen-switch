@@ -7,6 +7,8 @@ namespace ScreenSwitch;
 internal static class NativeMethods
 {
     internal const long WsExToolWindow = 0x00000080L;
+    internal const long WsExLayered = 0x00080000L;
+    internal const uint LwaAlpha = 0x00000002;
 
     internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -18,6 +20,9 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     internal static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    internal static extern bool IsWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     internal static extern bool IsIconic(IntPtr hWnd);
@@ -49,8 +54,38 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool SetWindowPos(
+        IntPtr hWnd,
+        IntPtr hWndInsertAfter,
+        int X,
+        int Y,
+        int cx,
+        int cy,
+        SetWindowPosFlags uFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
     internal static extern IntPtr GetWindowLongPtr(IntPtr hWnd, WindowLongIndex nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr", SetLastError = true)]
+    internal static extern IntPtr SetWindowLongPtr(IntPtr hWnd, WindowLongIndex nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool SetLayeredWindowAttributes(
+        IntPtr hwnd,
+        uint crKey,
+        byte bAlpha,
+        uint dwFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool GetLayeredWindowAttributes(
+        IntPtr hwnd,
+        out uint pcrKey,
+        out byte pbAlpha,
+        out uint pdwFlags);
 
     [DllImport("dwmapi.dll")]
     internal static extern int DwmGetWindowAttribute(
@@ -76,6 +111,25 @@ internal static class NativeMethods
         Minimize = 6,
         Restore = 9,
         Maximize = 3
+    }
+
+    [Flags]
+    internal enum SetWindowPosFlags : uint
+    {
+        NoZOrder = 0x0004,
+        NoActivate = 0x0010,
+        ShowWindow = 0x0040
+    }
+
+    internal enum InputType : uint
+    {
+        Keyboard = 1
+    }
+
+    [Flags]
+    internal enum KeyboardEventFlags : uint
+    {
+        KeyUp = 0x0002
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -122,5 +176,54 @@ internal static class NativeMethods
         public POINT ptMinPosition;
         public POINT ptMaxPosition;
         public RECT rcNormalPosition;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct INPUT
+    {
+        public InputType type;
+        public INPUTUNION union;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    internal struct INPUTUNION
+    {
+        [FieldOffset(0)]
+        public MOUSEINPUT mouseInput;
+
+        [FieldOffset(0)]
+        public KEYBDINPUT keyboardInput;
+
+        [FieldOffset(0)]
+        public HARDWAREINPUT hardwareInput;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public nuint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public KeyboardEventFlags dwFlags;
+        public uint time;
+        public nuint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct HARDWAREINPUT
+    {
+        public uint uMsg;
+        public ushort wParamL;
+        public ushort wParamH;
     }
 }
