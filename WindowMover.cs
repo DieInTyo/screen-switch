@@ -24,6 +24,64 @@ internal sealed class WindowMover
 
     public bool HasPendingFullscreenTransfers => _pendingFullscreenTransfers.Count > 0;
 
+    public IReadOnlyList<MovableWindowInfo> GetMovableWindows(bool includeMinimizedWindows = true)
+    {
+        var windows = new List<MovableWindowInfo>();
+        NativeMethods.EnumWindows((handle, lParam) =>
+        {
+            if (!TryGetWindowSnapshot(handle, out var snapshot))
+            {
+                return true;
+            }
+
+            if (!includeMinimizedWindows && IsMinimizedOrOffscreen(snapshot))
+            {
+                return true;
+            }
+
+            var title = GetWindowText(handle);
+            var processName = GetProcessName(snapshot.ProcessId);
+            var displayTitle = string.IsNullOrWhiteSpace(title) ? processName : title;
+            if (string.IsNullOrWhiteSpace(displayTitle))
+            {
+                return true;
+            }
+
+            var appName = string.IsNullOrWhiteSpace(processName) ? displayTitle : processName;
+            windows.Add(new MovableWindowInfo(
+                snapshot.Handle,
+                appName,
+                displayTitle,
+                snapshot.ProcessId,
+                snapshot.Screen.DeviceName,
+                IsMinimizedOrOffscreen(snapshot)));
+            return true;
+        }, IntPtr.Zero);
+
+        DiagnosticLog.Info($"action menu-window-list count={windows.Count} includeMinimized={includeMinimizedWindows}");
+        return windows;
+    }
+
+    public bool MoveWindowToOtherMonitor(IntPtr handle)
+    {
+        DiagnosticLog.Info($"action menu-window hwnd={DiagnosticLog.FormatHandle(handle)}");
+        var screens = GetTwoScreens();
+        if (!TryGetWindowSnapshot(handle, out var snapshot))
+        {
+            DiagnosticLog.Info($"action menu-window failed=snapshot hwnd={DiagnosticLog.FormatHandle(handle)}");
+            return false;
+        }
+
+        if (screens.All(screen => screen.DeviceName != snapshot.Screen.DeviceName))
+        {
+            DiagnosticLog.Info($"action menu-window failed=screen hwnd={DiagnosticLog.FormatHandle(handle)} screen={snapshot.Screen.DeviceName}");
+            return false;
+        }
+
+        var targetScreen = screens[0].DeviceName == snapshot.Screen.DeviceName ? screens[1] : screens[0];
+        return MoveSnapshotToScreen(snapshot, targetScreen);
+    }
+
     public int MoveActiveWindowBetweenMonitors(IntPtr preferredHandle = default, IntPtr swapHandle = default)
     {
         DiagnosticLog.Info("action active");
@@ -989,6 +1047,32 @@ internal sealed class WindowMover
         return className.ToString();
     }
 
+    private static string GetWindowText(IntPtr handle)
+    {
+        var length = NativeMethods.GetWindowTextLength(handle);
+        if (length <= 0)
+        {
+            return string.Empty;
+        }
+
+        var text = new StringBuilder(length + 1);
+        _ = NativeMethods.GetWindowText(handle, text, text.Capacity);
+        return text.ToString();
+    }
+
+    private static string GetProcessName(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return process.ProcessName;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
     private static string FormatRectangle(Rectangle rectangle)
     {
         return $"{rectangle.Left},{rectangle.Top},{rectangle.Width}x{rectangle.Height}";
@@ -1079,3 +1163,11 @@ internal sealed class WindowMover
 }
 
 internal readonly record struct TrackedWindow(IntPtr Handle, string ScreenDeviceName);
+
+internal readonly record struct MovableWindowInfo(
+    IntPtr Handle,
+    string AppName,
+    string Title,
+    int ProcessId,
+    string ScreenDeviceName,
+    bool IsMinimizedOrOffscreen);

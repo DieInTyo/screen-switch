@@ -16,6 +16,8 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly AppSettings _settings;
     private readonly ToolStripMenuItem _moveActiveItem;
     private readonly ToolStripMenuItem _moveAllItem;
+    private readonly ToolStripMenuItem _moveWindowMenu;
+    private readonly ToolStripMenuItem _moveSelectedWindowsItem;
     private readonly ToolStripMenuItem _leftClickMenu;
     private readonly ToolStripMenuItem _leftClickActiveItem;
     private readonly ToolStripMenuItem _leftClickAllItem;
@@ -34,6 +36,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _exitItem;
     private readonly Dictionary<string, IntPtr> _lastWindowByMonitor = new(StringComparer.Ordinal);
     private readonly Dictionary<HotkeyAction, HotkeyRegistrationFailure> _hotkeyRegistrationErrors = new();
+    private readonly HashSet<IntPtr> _selectedMoveWindowHandles = new();
     private LocalizedStrings _text;
     private TrackedWindow _lastTrackedWindow;
     private bool _allowMenuCloseOnce;
@@ -64,6 +67,16 @@ internal sealed class TrayAppContext : ApplicationContext
             MoveAllWindows();
         });
         menu.Items.Add(_moveAllItem);
+        _moveWindowMenu = new ToolStripMenuItem();
+        _moveWindowMenu.DropDownOpening += (_, _) =>
+        {
+            _selectedMoveWindowHandles.Clear();
+            RebuildMoveWindowMenu();
+            ApplyMonitorAwareDropDownDirection(_moveWindowMenu);
+        };
+        _moveWindowMenu.DropDown.Closing += MenuOnClosing;
+        _moveSelectedWindowsItem = new ToolStripMenuItem(string.Empty, null, (_, _) => MoveSelectedWindows());
+        menu.Items.Add(_moveWindowMenu);
         menu.Items.Add(new ToolStripSeparator());
 
         _leftClickMenu = new ToolStripMenuItem();
@@ -224,6 +237,182 @@ internal sealed class TrayAppContext : ApplicationContext
             count => $"{_text.MovedWindowsPrefix}: {count}.");
     }
 
+    private void MoveSpecificWindow(MovableWindowInfo window)
+    {
+        AllowMenuClose();
+        try
+        {
+            DiagnosticLog.Info(
+                $"action menu-window selected hwnd={DiagnosticLog.FormatHandle(window.Handle)} title=\"{window.Title}\" app=\"{window.AppName}\" pid={window.ProcessId}");
+            if (!_windowMover.MoveWindowToOtherMonitor(window.Handle))
+            {
+                ShowStatus(_text.WindowMoveFailed, ToolTipIcon.Warning);
+                return;
+            }
+
+            UpdateTrackerInterval();
+            ShowStatus(_text.WindowMoved);
+        }
+        catch (Exception ex)
+        {
+            UpdateTrackerInterval();
+            DiagnosticLog.Info($"action menu-window failed {ex.GetType().Name}: {ex.Message}");
+            ShowStatus(LocalizeError(ex), ToolTipIcon.Warning);
+        }
+    }
+
+    private void MoveSelectedWindows()
+    {
+        var handles = _selectedMoveWindowHandles.ToArray();
+        if (handles.Length == 0)
+        {
+            return;
+        }
+
+        AllowMenuClose();
+        try
+        {
+            var movedCount = 0;
+            foreach (var handle in handles)
+            {
+                DiagnosticLog.Info($"action menu-window selected-batch hwnd={DiagnosticLog.FormatHandle(handle)}");
+                if (_windowMover.MoveWindowToOtherMonitor(handle))
+                {
+                    movedCount++;
+                }
+            }
+
+            _selectedMoveWindowHandles.Clear();
+            UpdateTrackerInterval();
+            ShowStatus($"{_text.MovedWindowsPrefix}: {movedCount}.");
+        }
+        catch (Exception ex)
+        {
+            UpdateTrackerInterval();
+            DiagnosticLog.Info($"action menu-window batch failed {ex.GetType().Name}: {ex.Message}");
+            ShowStatus(LocalizeError(ex), ToolTipIcon.Warning);
+        }
+    }
+
+    private void RebuildMoveWindowMenu()
+    {
+        _moveWindowMenu.DropDownItems.Clear();
+        var windows = _windowMover
+            .GetMovableWindows(includeMinimizedWindows: true)
+            .OrderBy(window => window.AppName, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(window => window.Title, StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
+
+        PruneSelectedMoveWindows(windows);
+        _moveSelectedWindowsItem.Text = _text.MoveSelectedWindows;
+        _moveSelectedWindowsItem.Enabled = _selectedMoveWindowHandles.Count > 0;
+        _moveWindowMenu.DropDownItems.Add(_moveSelectedWindowsItem);
+        _moveWindowMenu.DropDownItems.Add(new ToolStripSeparator());
+
+        if (windows.Length == 0)
+        {
+            _moveWindowMenu.DropDownItems.Add(new ToolStripMenuItem(_text.NoWindowsFound)
+            {
+                Enabled = false
+            });
+            return;
+        }
+
+        foreach (var appGroup in windows.GroupBy(window => window.AppName, StringComparer.CurrentCultureIgnoreCase))
+        {
+            var appWindows = appGroup.ToArray();
+            if (appWindows.Length == 1)
+            {
+                _moveWindowMenu.DropDownItems.Add(CreateWindowMenuItem(FormatWindowMenuLabel(appGroup.Key, appWindows[0]), appWindows[0]));
+                continue;
+            }
+
+            var appItem = new ToolStripMenuItem(FormatAppGroupLabel(appGroup.Key, appWindows))
+            {
+                AutoToolTip = true,
+                ToolTipText = appGroup.Key
+            };
+            appItem.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(appItem);
+            appItem.DropDown.Closing += MenuOnClosing;
+            foreach (var window in appWindows)
+            {
+                appItem.DropDownItems.Add(CreateWindowMenuItem(FormatWindowMenuLabel(window.Title, window), window));
+            }
+
+            _moveWindowMenu.DropDownItems.Add(appItem);
+        }
+    }
+
+    private ToolStripMenuItem CreateWindowMenuItem(string label, MovableWindowInfo window)
+    {
+        var item = new ToolStripMenuItem(label)
+        {
+            AutoToolTip = true,
+            CheckOnClick = true,
+            Checked = _selectedMoveWindowHandles.Contains(window.Handle),
+            DoubleClickEnabled = true,
+            ToolTipText = window.Title
+        };
+        item.CheckedChanged += (_, _) => ToggleMoveWindowSelection(window.Handle, item.Checked);
+        item.DoubleClick += (_, _) => MoveSpecificWindow(window);
+
+        return item;
+    }
+
+    private void ToggleMoveWindowSelection(IntPtr handle, bool selected)
+    {
+        if (selected)
+        {
+            _selectedMoveWindowHandles.Add(handle);
+        }
+        else
+        {
+            _selectedMoveWindowHandles.Remove(handle);
+        }
+
+        _moveSelectedWindowsItem.Enabled = _selectedMoveWindowHandles.Count > 0;
+    }
+
+    private void PruneSelectedMoveWindows(IReadOnlyCollection<MovableWindowInfo> windows)
+    {
+        var availableHandles = windows.Select(window => window.Handle).ToHashSet();
+        _selectedMoveWindowHandles.RemoveWhere(handle => !availableHandles.Contains(handle));
+    }
+
+    private static string FormatAppGroupLabel(string appName, IReadOnlyCollection<MovableWindowInfo> windows)
+    {
+        var monitors = windows
+            .Select(window => GetMonitorNumber(window.ScreenDeviceName))
+            .Distinct()
+            .OrderBy(monitor => monitor)
+            .ToArray();
+
+        return monitors.Length == 0
+            ? appName
+            : $"{FormatMonitorBadge(monitors)} {appName}";
+    }
+
+    private static string FormatWindowMenuLabel(string label, MovableWindowInfo window)
+    {
+        return $"{FormatMonitorBadge(new[] { GetMonitorNumber(window.ScreenDeviceName) })} {label}";
+    }
+
+    private static string FormatMonitorBadge(IEnumerable<int> monitors)
+    {
+        return $"[{string.Join(",", monitors)}]";
+    }
+
+    private static int GetMonitorNumber(string screenDeviceName)
+    {
+        var screens = Screen.AllScreens
+            .OrderBy(screen => screen.Bounds.Left)
+            .ThenBy(screen => screen.Bounds.Top)
+            .ToArray();
+
+        var index = Array.FindIndex(screens, screen => screen.DeviceName == screenDeviceName);
+        return index >= 0 ? index + 1 : 0;
+    }
+
     private void ExecuteMove(Func<int> action, Func<int, string> successMessageFactory)
     {
         try
@@ -267,6 +456,7 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         _moveActiveItem.Text = _text.MoveActiveWindow;
         _moveAllItem.Text = _text.MoveAllWindows;
+        _moveWindowMenu.Text = _text.MoveWindow;
         _leftClickMenu.Text = _text.LeftClick;
         _leftClickActiveItem.Text = _text.LeftClickActive;
         _leftClickAllItem.Text = _text.LeftClickAll;
