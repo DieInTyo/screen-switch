@@ -32,12 +32,30 @@ internal sealed class WindowMover
             throw new InvalidOperationException("Не удалось определить открытое активное окно для обмена.");
         }
 
-        if (TrySwapWindows(activeHandle, swapHandle, screens))
+        if (TryGetWindowSnapshot(activeHandle, out var activeSnapshot, requireNonMinimized: true)
+            && TryGetTopWindowOnOtherMonitor(activeSnapshot, screens, out var liveSwapSnapshot)
+            && TrySwapSnapshots(activeSnapshot, liveSwapSnapshot, screens))
         {
+            DiagnosticLog.Info(
+                $"active swap candidate live hwnd={DiagnosticLog.FormatHandle(liveSwapSnapshot.Handle)} class={liveSwapSnapshot.ClassName} screen={liveSwapSnapshot.Screen.DeviceName}");
             DiagnosticLog.Info($"action active completed moved=2 pending={_pendingFullscreenTransfers.Count}");
             return 2;
         }
 
+        if (swapHandle != IntPtr.Zero
+            && TryGetWindowSnapshot(activeHandle, out activeSnapshot, requireNonMinimized: true)
+            && TryGetWindowSnapshot(swapHandle, out var cachedSwapSnapshot, requireNonMinimized: true)
+            && activeSnapshot.Screen.DeviceName != cachedSwapSnapshot.Screen.DeviceName
+            && TrySwapSnapshots(activeSnapshot, cachedSwapSnapshot, screens))
+        {
+            DiagnosticLog.Info(
+                $"active swap candidate fallback-cache hwnd={DiagnosticLog.FormatHandle(cachedSwapSnapshot.Handle)} class={cachedSwapSnapshot.ClassName} screen={cachedSwapSnapshot.Screen.DeviceName}");
+            DiagnosticLog.Info($"action active completed moved=2 pending={_pendingFullscreenTransfers.Count}");
+            return 2;
+        }
+
+        DiagnosticLog.Info(
+            $"active swap candidate missing active={DiagnosticLog.FormatHandle(activeHandle)} fallback={DiagnosticLog.FormatHandle(swapHandle)}");
         throw new InvalidOperationException("На другом мониторе нет подходящего открытого окна для обмена.");
     }
 
@@ -213,18 +231,42 @@ internal sealed class WindowMover
         return true;
     }
 
-    private bool TrySwapWindows(IntPtr activeHandle, IntPtr swapHandle, Screen[] screens)
+    private bool TryGetTopWindowOnOtherMonitor(
+        WindowSnapshot activeSnapshot,
+        Screen[] screens,
+        out WindowSnapshot swapSnapshot)
     {
-        if (!TryGetWindowSnapshot(activeHandle, out var activeSnapshot, requireNonMinimized: true))
-        {
-            return false;
-        }
+        swapSnapshot = default;
+        var foundSnapshot = default(WindowSnapshot);
 
-        if (!TryGetWindowSnapshot(swapHandle, out var swapSnapshot, requireNonMinimized: true))
+        NativeMethods.EnumWindows((handle, lParam) =>
         {
-            return false;
-        }
+            if (handle == activeSnapshot.Handle)
+            {
+                return true;
+            }
 
+            if (!TryGetWindowSnapshot(handle, out var candidate, requireNonMinimized: true))
+            {
+                return true;
+            }
+
+            if (screens.All(screen => screen.DeviceName != candidate.Screen.DeviceName)
+                || candidate.Screen.DeviceName == activeSnapshot.Screen.DeviceName)
+            {
+                return true;
+            }
+
+            foundSnapshot = candidate;
+            return false;
+        }, IntPtr.Zero);
+
+        swapSnapshot = foundSnapshot;
+        return swapSnapshot.Handle != IntPtr.Zero;
+    }
+
+    private bool TrySwapSnapshots(WindowSnapshot activeSnapshot, WindowSnapshot swapSnapshot, Screen[] screens)
+    {
         if (activeSnapshot.Handle == swapSnapshot.Handle)
         {
             return false;

@@ -109,22 +109,15 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private void MoveActiveWindow()
     {
-        var otherMonitorWindow = GetLastWindowOnOtherMonitor();
+        var fallbackOtherMonitorWindow = GetLastWindowOnOtherMonitor();
 
         try
         {
-            if (otherMonitorWindow.Handle == IntPtr.Zero)
-            {
-                ShowStatus("На другом мониторе нет запомненного открытого окна для обмена.");
-                return;
-            }
-
-            var movedCount = _windowMover.MoveActiveWindowBetweenMonitors(_lastTrackedWindow.Handle, otherMonitorWindow.Handle);
+            var movedCount = _windowMover.MoveActiveWindowBetweenMonitors(_lastTrackedWindow.Handle, fallbackOtherMonitorWindow.Handle);
             UpdateTrackerInterval();
 
             if (movedCount >= 2)
             {
-                RememberSwap(otherMonitorWindow);
                 ShowStatus("Активное окно и окно на другом мониторе поменялись местами.");
                 return;
             }
