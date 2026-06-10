@@ -34,8 +34,14 @@ internal static class TrayIconFactory
             Color.FromArgb(84, 84, 88),
             Color.FromArgb(32, 32, 34),
             90f);
-        using var arrowBrush = new SolidBrush(Color.WhiteSmoke);
+        using var arrowPen = new Pen(Color.WhiteSmoke, 3.2f)
+        {
+            StartCap = LineCap.Round,
+            EndCap = LineCap.Round
+        };
+        using var arrowCap = new AdjustableArrowCap(3.2f, 3.2f, true);
         using var outlinePen = new Pen(Color.FromArgb(20, 20, 22), 2f);
+        arrowPen.CustomEndCap = arrowCap;
 
         FillRoundedRectangle(graphics, bezelBrush, new Rectangle(7, 8, 50, 38), 6);
         graphics.DrawPath(outlinePen, CreateRoundedRectanglePath(new Rectangle(7, 8, 50, 38), 6));
@@ -52,10 +58,8 @@ internal static class TrayIconFactory
         graphics.FillPolygon(standBrush, standPoints);
         FillRoundedRectangle(graphics, baseBrush, new Rectangle(17, 56, 30, 5), 2);
 
-        using var topArrow = CreateTopArrowPath();
-        using var bottomArrow = CreateBottomArrowPath();
-        graphics.FillPath(arrowBrush, topArrow);
-        graphics.FillPath(arrowBrush, bottomArrow);
+        graphics.DrawLine(arrowPen, 20, 22, 41, 22);
+        graphics.DrawLine(arrowPen, 44, 31, 23, 31);
 
         var handle = bitmap.GetHicon();
         try
@@ -89,39 +93,4 @@ internal static class TrayIconFactory
         return path;
     }
 
-    private static GraphicsPath CreateTopArrowPath()
-    {
-        var path = new GraphicsPath();
-        path.StartFigure();
-        path.AddLines(new Point[]
-        {
-            new Point(22, 23),
-            new Point(34, 23),
-            new Point(34, 18),
-            new Point(42, 26),
-            new Point(34, 34),
-            new Point(34, 29),
-            new Point(22, 29)
-        });
-        path.CloseFigure();
-        return path;
-    }
-
-    private static GraphicsPath CreateBottomArrowPath()
-    {
-        var path = new GraphicsPath();
-        path.StartFigure();
-        path.AddLines(new Point[]
-        {
-            new Point(42, 31),
-            new Point(30, 31),
-            new Point(30, 36),
-            new Point(22, 28),
-            new Point(30, 20),
-            new Point(30, 25),
-            new Point(42, 25)
-        });
-        path.CloseFigure();
-        return path;
-    }
 }
