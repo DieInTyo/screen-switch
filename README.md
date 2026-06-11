@@ -1,23 +1,44 @@
 # Screen Switch
 
-Небольшое Windows tray-приложение для переноса окон между двумя мониторами.
+A small Windows tray app for moving windows between two monitors.
 
-## Что умеет
+## Features
 
-- левый клик по иконке выполняет выбранное действие: перенести активное окно или все окна;
-- относительное положение и размер окна сохраняются относительно рабочей области монитора;
-- настройки действия на левый клик и уведомлений сохраняются между запусками;
-- автозапуск можно включить прямо из меню в трее;
-- приложение предупреждает, если подключено не ровно два монитора.
+- Left-clicking the tray icon runs the selected action: move the active window or move all windows.
+- A tray menu can move a specific window, or several selected windows at once.
+- Window size and position are preserved relative to the target monitor work area.
+- Normal, maximized, minimized, and browser fullscreen windows are supported.
+- Left-click action, notifications, hotkeys, language, and startup settings are saved between launches.
+- Startup with Windows can be enabled directly from the tray menu.
+- The app warns you if exactly two monitors are not connected.
 
-## Готовый файл
+## Languages
 
-После `dotnet publish -c Release` готовый `ScreenSwitch.exe` копируется в корень проекта.
+English is the default interface language. Russian is also available from the tray menu.
 
-## Локальный запуск
+## Ready-Made EXE
+
+You can use the ready-made `ScreenSwitch.exe` from the release archive. Download the zip, extract it, and run `ScreenSwitch.exe`.
+
+After launch, the app appears in the Windows tray or hidden tray icons area.
+
+## Build From Source
+
+Requirements:
+
+- Windows
+- .NET SDK 8 or newer
+
+Build a release executable:
+
+```powershell
+dotnet publish .\ScreenSwitch.csproj -c Release
+```
+
+After publishing, the ready-to-use `ScreenSwitch.exe` is copied to the project root.
+
+For local development, run:
 
 ```powershell
 dotnet run
 ```
-
-После запуска приложение появится в скрытых значках Windows.
