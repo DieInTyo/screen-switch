@@ -16,6 +16,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly AppSettings _settings;
     private readonly ToolStripMenuItem _moveActiveItem;
     private readonly ToolStripMenuItem _moveAllItem;
+    private readonly ToolStripMenuItem _minimizeAllItem;
     private readonly ToolStripMenuItem _moveWindowMenu;
     private readonly ToolStripMenuItem _moveSelectedWindowsItem;
     private readonly ToolStripMenuItem _leftClickMenu;
@@ -27,6 +28,8 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _hotkeySelectedModeItem;
     private readonly ToolStripMenuItem _hotkeyActiveWindowItem;
     private readonly ToolStripMenuItem _hotkeyAllWindowsItem;
+    private readonly ToolStripMenuItem _hotkeyMoveWindowItem;
+    private readonly ToolStripMenuItem _hotkeyMinimizeAllWindowsItem;
     private readonly ToolStripMenuItem _resetHotkeysItem;
     private readonly ToolStripMenuItem _notificationsItem;
     private readonly ToolStripMenuItem _startupItem;
@@ -39,6 +42,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly HashSet<IntPtr> _selectedMoveWindowHandles = new();
     private LocalizedStrings _text;
     private TrackedWindow _lastTrackedWindow;
+    private MoveWindowPickerForm? _moveWindowPicker;
     private bool _allowMenuCloseOnce;
 
     public TrayAppContext()
@@ -81,6 +85,12 @@ internal sealed class TrayAppContext : ApplicationContext
         _moveWindowMenu.DropDown.Closing += MenuOnClosing;
         _moveSelectedWindowsItem = new ToolStripMenuItem(string.Empty, null, (_, _) => MoveSelectedWindows());
         menu.Items.Add(_moveWindowMenu);
+        _minimizeAllItem = new ToolStripMenuItem(string.Empty, null, (_, _) =>
+        {
+            AllowMenuClose();
+            MinimizeAllWindows();
+        });
+        menu.Items.Add(_minimizeAllItem);
         menu.Items.Add(new ToolStripSeparator());
 
         _leftClickMenu = new ToolStripMenuItem();
@@ -110,12 +120,16 @@ internal sealed class TrayAppContext : ApplicationContext
         _hotkeySelectedModeItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.SelectedMode));
         _hotkeyActiveWindowItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.ActiveWindow));
         _hotkeyAllWindowsItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.AllWindows));
+        _hotkeyMoveWindowItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.MoveWindow));
+        _hotkeyMinimizeAllWindowsItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.MinimizeAllWindows));
         _resetHotkeysItem = new ToolStripMenuItem(string.Empty, null, (_, _) => ResetHotkeys());
         _hotkeysMenu.DropDownItems.Add(_hotkeysEnabledItem);
         _hotkeysMenu.DropDownItems.Add(new ToolStripSeparator());
         _hotkeysMenu.DropDownItems.Add(_hotkeySelectedModeItem);
         _hotkeysMenu.DropDownItems.Add(_hotkeyActiveWindowItem);
         _hotkeysMenu.DropDownItems.Add(_hotkeyAllWindowsItem);
+        _hotkeysMenu.DropDownItems.Add(_hotkeyMoveWindowItem);
+        _hotkeysMenu.DropDownItems.Add(_hotkeyMinimizeAllWindowsItem);
         _hotkeysMenu.DropDownItems.Add(new ToolStripSeparator());
         _hotkeysMenu.DropDownItems.Add(_resetHotkeysItem);
         menu.Items.Add(_hotkeysMenu);
@@ -239,6 +253,40 @@ internal sealed class TrayAppContext : ApplicationContext
         ExecuteMove(
             () => _windowMover.MoveAllWindowsBetweenMonitors(_settings.MoveMinimizedWindows),
             count => $"{_text.MovedWindowsPrefix}: {count}.");
+    }
+
+    private void MinimizeAllWindows()
+    {
+        ExecuteMove(
+            () => _windowMover.MinimizeAllWindows(),
+            count => $"{_text.MinimizedWindowsPrefix}: {count}.");
+    }
+
+    private void ShowMoveWindowPicker()
+    {
+        if (_moveWindowPicker is { IsDisposed: false })
+        {
+            _moveWindowPicker.Activate();
+            return;
+        }
+
+        DiagnosticLog.Info("action move-window-picker open");
+        _moveWindowPicker = new MoveWindowPickerForm(
+            _windowMover,
+            _text,
+            movedCount =>
+            {
+                UpdateTrackerInterval();
+                ShowStatus($"{_text.MovedWindowsPrefix}: {movedCount}.");
+            },
+            ex =>
+            {
+                UpdateTrackerInterval();
+                ShowStatus(LocalizeError(ex), ToolTipIcon.Warning);
+            });
+        _moveWindowPicker.FormClosed += (_, _) => _moveWindowPicker = null;
+        _moveWindowPicker.Show();
+        _moveWindowPicker.Activate();
     }
 
     private void MoveSpecificWindow(MovableWindowInfo window)
@@ -466,6 +514,7 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         _moveActiveItem.Text = _text.MoveActiveWindow;
         _moveAllItem.Text = _text.MoveAllWindows;
+        _minimizeAllItem.Text = _text.MinimizeAllWindows;
         _moveWindowMenu.Text = _text.MoveWindow;
         _leftClickMenu.Text = _text.LeftClick;
         _leftClickActiveItem.Text = _text.LeftClickActive;
@@ -546,6 +595,12 @@ internal sealed class TrayAppContext : ApplicationContext
             case HotkeyAction.AllWindows:
                 MoveAllWindows();
                 break;
+            case HotkeyAction.MoveWindow:
+                ShowMoveWindowPicker();
+                break;
+            case HotkeyAction.MinimizeAllWindows:
+                MinimizeAllWindows();
+                break;
         }
     }
 
@@ -588,6 +643,8 @@ internal sealed class TrayAppContext : ApplicationContext
         _settings.SelectedModeHotkey = null;
         _settings.ActiveWindowHotkey = null;
         _settings.AllWindowsHotkey = null;
+        _settings.MoveWindowHotkey = null;
+        _settings.MinimizeAllWindowsHotkey = null;
         _settingsStore.Save(_settings);
         UpdateHotkeyMenuText();
         ApplyHotkeyRegistrations(showFailures: true);
@@ -616,6 +673,8 @@ internal sealed class TrayAppContext : ApplicationContext
         UpdateHotkeyMenuItem(_hotkeySelectedModeItem, _text.SelectedMode, _settings.SelectedModeHotkey, HotkeyAction.SelectedMode);
         UpdateHotkeyMenuItem(_hotkeyActiveWindowItem, _text.ActiveWindow, _settings.ActiveWindowHotkey, HotkeyAction.ActiveWindow);
         UpdateHotkeyMenuItem(_hotkeyAllWindowsItem, _text.AllWindows, _settings.AllWindowsHotkey, HotkeyAction.AllWindows);
+        UpdateHotkeyMenuItem(_hotkeyMoveWindowItem, _text.MoveWindow, _settings.MoveWindowHotkey, HotkeyAction.MoveWindow);
+        UpdateHotkeyMenuItem(_hotkeyMinimizeAllWindowsItem, _text.MinimizeAllWindows, _settings.MinimizeAllWindowsHotkey, HotkeyAction.MinimizeAllWindows);
     }
 
     private void UpdateHotkeyMenuItem(
@@ -643,6 +702,8 @@ internal sealed class TrayAppContext : ApplicationContext
             HotkeyAction.SelectedMode => _settings.SelectedModeHotkey?.Clone(),
             HotkeyAction.ActiveWindow => _settings.ActiveWindowHotkey?.Clone(),
             HotkeyAction.AllWindows => _settings.AllWindowsHotkey?.Clone(),
+            HotkeyAction.MoveWindow => _settings.MoveWindowHotkey?.Clone(),
+            HotkeyAction.MinimizeAllWindows => _settings.MinimizeAllWindowsHotkey?.Clone(),
             _ => null
         };
     }
@@ -659,6 +720,12 @@ internal sealed class TrayAppContext : ApplicationContext
                 break;
             case HotkeyAction.AllWindows:
                 _settings.AllWindowsHotkey = gesture;
+                break;
+            case HotkeyAction.MoveWindow:
+                _settings.MoveWindowHotkey = gesture;
+                break;
+            case HotkeyAction.MinimizeAllWindows:
+                _settings.MinimizeAllWindowsHotkey = gesture;
                 break;
         }
     }
@@ -677,6 +744,8 @@ internal sealed class TrayAppContext : ApplicationContext
             HotkeyAction.SelectedMode => _text.SelectedMode,
             HotkeyAction.ActiveWindow => _text.ActiveWindow,
             HotkeyAction.AllWindows => _text.AllWindows,
+            HotkeyAction.MoveWindow => _text.MoveWindow,
+            HotkeyAction.MinimizeAllWindows => _text.MinimizeAllWindows,
             _ => "Action"
         };
     }

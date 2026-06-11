@@ -60,6 +60,8 @@ internal sealed class AppSettings
     public HotkeyGesture? SelectedModeHotkey { get; set; }
     public HotkeyGesture? ActiveWindowHotkey { get; set; }
     public HotkeyGesture? AllWindowsHotkey { get; set; }
+    public HotkeyGesture? MoveWindowHotkey { get; set; }
+    public HotkeyGesture? MinimizeAllWindowsHotkey { get; set; }
     public AppLanguage Language { get; set; } = AppLanguage.English;
 }
 
@@ -73,7 +75,9 @@ internal enum HotkeyAction
 {
     SelectedMode = 0,
     ActiveWindow = 1,
-    AllWindows = 2
+    AllWindows = 2,
+    MoveWindow = 3,
+    MinimizeAllWindows = 4
 }
 
 internal enum AppLanguage

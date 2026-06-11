@@ -16,9 +16,11 @@ internal sealed class LocalizedStrings
 
     public string MoveActiveWindow => IsRussian ? "Переместить активное окно" : "Move active window";
     public string MoveAllWindows => IsRussian ? "Переместить все окна" : "Move all windows";
+    public string MinimizeAllWindows => IsRussian ? "Свернуть все окна" : "Minimize all windows";
     public string MoveWindow => IsRussian ? "Перенести окно" : "Move window";
     public string MoveSelectedWindows => IsRussian ? "Перенести выбранные" : "Move selected";
     public string MoveWindowDoubleClickHint => IsRussian ? "Двойной клик переносит одно окно" : "Double-click moves one window";
+    public string MoveWindowPickerTitle => IsRussian ? "Перенести окно" : "Move window";
     public string NoWindowsFound => IsRussian ? "Окна не найдены" : "No windows found";
     public string WindowMoved => IsRussian ? "Окно перенесено." : "Window moved.";
     public string WindowMoveFailed => IsRussian ? "Не удалось перенести выбранное окно." : "Could not move the selected window.";
@@ -53,11 +55,12 @@ internal sealed class LocalizedStrings
     public string LeftClickNowAll => IsRussian ? "Теперь левый клик переносит все окна." : "Left click now moves all windows.";
     public string ActiveSwapCompleted => IsRussian ? "Активное окно и окно на другом мониторе поменялись местами." : "Active window and the window on the other monitor were swapped.";
     public string MovedWindowsPrefix => IsRussian ? "Перемещено окон" : "Moved windows";
+    public string MinimizedWindowsPrefix => IsRussian ? "Свернуто окон" : "Minimized windows";
     public string MinimizedWillMove => IsRussian ? "Свернутые окна будут переноситься." : "Minimized windows will be moved.";
     public string MinimizedWillSkip => IsRussian ? "Свернутые окна будут пропускаться." : "Minimized windows will be skipped.";
     public string CouldNotFindActiveWindow => IsRussian ? "Не удалось определить открытое активное окно для обмена." : "Could not detect an open active window to swap.";
     public string NoWindowOnOtherMonitor => IsRussian ? "На другом мониторе нет подходящего открытого окна для обмена." : "There is no suitable open window on the other monitor to swap with.";
-    public string TwoMonitorsRequired => IsRussian ? "Приложение работает только когда подключено ровно два монитора." : "Screen Switch works only when exactly two monitors are connected.";
+    public string TwoMonitorsRequired => IsRussian ? "Screen Switch работает только когда подключено ровно два монитора." : "Screen Switch works only when exactly two monitors are connected.";
     public string StartupRegistryOpenFailed => IsRussian ? "Не удалось открыть раздел автозапуска." : "Could not open the startup registry key.";
 
     public string ChangeStartupFailed(string message)

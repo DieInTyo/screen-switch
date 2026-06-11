@@ -156,6 +156,36 @@ internal sealed class WindowMover
         return moved;
     }
 
+    public int MinimizeAllWindows()
+    {
+        DiagnosticLog.Info("action minimize-all");
+        var minimized = 0;
+
+        NativeMethods.EnumWindows((handle, lParam) =>
+        {
+            if (!TryGetWindowSnapshot(handle, out var snapshot, requireNonMinimized: true))
+            {
+                return true;
+            }
+
+            if (NativeMethods.ShowWindow(snapshot.Handle, NativeMethods.ShowWindowCommand.Minimize))
+            {
+                minimized++;
+                DiagnosticLog.Info(
+                    $"action minimize-all window hwnd={DiagnosticLog.FormatHandle(snapshot.Handle)} title=\"{GetWindowText(snapshot.Handle)}\" pid={snapshot.ProcessId}");
+            }
+            else
+            {
+                DiagnosticLog.Win32Failure("ShowWindow Minimize", snapshot.Handle);
+            }
+
+            return true;
+        }, IntPtr.Zero);
+
+        DiagnosticLog.Info($"action minimize-all completed minimized={minimized}");
+        return minimized;
+    }
+
     public void ProcessPendingFullscreenTransfers()
     {
         if (_pendingFullscreenTransfers.Count == 0)
