@@ -24,6 +24,11 @@ internal static class DiagnosticLog
         Write("INFO", message);
     }
 
+    public static void Exception(string context, Exception exception)
+    {
+        Write("ERROR", $"{context} {exception.GetType().FullName}: {exception.Message}{Environment.NewLine}{exception}");
+    }
+
     public static void Win32Failure(string operation, IntPtr handle)
     {
         Write("WARN", $"{operation} hwnd={FormatHandle(handle)} error={Marshal.GetLastWin32Error()}");

@@ -27,6 +27,8 @@ internal sealed class WindowMover
     public IReadOnlyList<MovableWindowInfo> GetMovableWindows(bool includeMinimizedWindows = true)
     {
         var windows = new List<MovableWindowInfo>();
+        var foregroundWindow = NativeMethods.GetForegroundWindow();
+        var topWindowScreens = new HashSet<string>(StringComparer.Ordinal);
         NativeMethods.EnumWindows((handle, lParam) =>
         {
             if (!TryGetWindowSnapshot(handle, out var snapshot))
@@ -41,6 +43,7 @@ internal sealed class WindowMover
 
             var title = GetWindowText(handle);
             var processName = GetProcessName(snapshot.ProcessId);
+            var processPath = GetProcessPath(snapshot.ProcessId);
             var displayTitle = string.IsNullOrWhiteSpace(title) ? processName : title;
             if (string.IsNullOrWhiteSpace(displayTitle))
             {
@@ -48,13 +51,18 @@ internal sealed class WindowMover
             }
 
             var appName = string.IsNullOrWhiteSpace(processName) ? displayTitle : processName;
+            var isMinimizedOrOffscreen = IsMinimizedOrOffscreen(snapshot);
+            var isTopOnMonitor = !isMinimizedOrOffscreen && topWindowScreens.Add(snapshot.Screen.DeviceName);
             windows.Add(new MovableWindowInfo(
                 snapshot.Handle,
                 appName,
                 displayTitle,
                 snapshot.ProcessId,
+                processPath,
                 snapshot.Screen.DeviceName,
-                IsMinimizedOrOffscreen(snapshot)));
+                isMinimizedOrOffscreen,
+                snapshot.Handle == foregroundWindow,
+                isTopOnMonitor));
             return true;
         }, IntPtr.Zero);
 
@@ -492,9 +500,9 @@ internal sealed class WindowMover
             return false;
         }
 
-        var className = new StringBuilder(256);
-        _ = NativeMethods.GetClassName(handle, className, className.Capacity);
-        if (className.ToString() is "Shell_TrayWnd" or "Progman" or "WorkerW")
+        var className = GetClassName(handle);
+        if (className is "Shell_TrayWnd" or "Progman" or "WorkerW"
+            || IsTransientPopupClass(className))
         {
             return false;
         }
@@ -551,6 +559,14 @@ internal sealed class WindowMover
         var isFullScreenLike = !isOffscreenLike && CoversScreen(currentBounds, currentScreen.Bounds);
         var screen = isFullScreenLike || !isOffscreenLike ? currentScreen : restoreScreen;
         var className = GetClassName(handle);
+        var title = GetWindowText(handle);
+        if (IsTransientPopupWindow(handle, className, title, currentBounds, normalBounds, isFullScreenLike))
+        {
+            DiagnosticLog.Info(
+                $"skip transient-popup hwnd={DiagnosticLog.FormatHandle(handle)} class={className} title=\"{title}\" rect={FormatRectangle(currentBounds)}");
+            return false;
+        }
+
         snapshot = new WindowSnapshot(handle, placement, normalBounds, currentBounds, screen, restoreScreen, isFullScreenLike, isOffscreenLike, processId, className);
         return true;
     }
@@ -1103,6 +1119,19 @@ internal sealed class WindowMover
         }
     }
 
+    private static string GetProcessPath(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return process.MainModule?.FileName ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
     private static string FormatRectangle(Rectangle rectangle)
     {
         return $"{rectangle.Left},{rectangle.Top},{rectangle.Width}x{rectangle.Height}";
@@ -1112,6 +1141,54 @@ internal sealed class WindowMover
     {
         return className.Contains("Chrome_", StringComparison.Ordinal)
             && className.Contains("WidgetWin", StringComparison.Ordinal);
+    }
+
+    private static bool IsTransientPopupClass(string className)
+    {
+        return className.Equals("tooltips_class32", StringComparison.OrdinalIgnoreCase)
+            || className.Equals("SysShadow", StringComparison.OrdinalIgnoreCase)
+            || className.Equals("DropDown", StringComparison.OrdinalIgnoreCase)
+            || className.Contains("Tooltip", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTransientPopupWindow(
+        IntPtr handle,
+        string className,
+        string title,
+        Rectangle currentBounds,
+        Rectangle normalBounds,
+        bool isFullScreenLike)
+    {
+        if (isFullScreenLike)
+        {
+            return false;
+        }
+
+        if (IsTransientPopupClass(className))
+        {
+            return true;
+        }
+
+        var style = NativeMethods.GetWindowLongPtr(handle, NativeMethods.WindowLongIndex.Style).ToInt64();
+        var isPopup = (style & NativeMethods.WsPopup) != 0;
+        var hasCaption = (style & NativeMethods.WsCaption) != 0;
+        var smallCurrent = currentBounds.Width <= 460 || currentBounds.Height <= 180;
+        var smallNormal = normalBounds.Width <= 460 || normalBounds.Height <= 180;
+        if (isPopup && !hasCaption && smallCurrent && smallNormal)
+        {
+            return true;
+        }
+
+        if (isPopup
+            && smallCurrent
+            && title.Contains(':', StringComparison.CurrentCulture)
+            && !title.Contains(" - ", StringComparison.CurrentCulture)
+            && !title.Contains(" — ", StringComparison.CurrentCulture))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static bool IsOffscreenLike(Rectangle rectangle)
@@ -1199,5 +1276,8 @@ internal readonly record struct MovableWindowInfo(
     string AppName,
     string Title,
     int ProcessId,
+    string ProcessPath,
     string ScreenDeviceName,
-    bool IsMinimizedOrOffscreen);
+    bool IsMinimizedOrOffscreen,
+    bool IsForeground,
+    bool IsTopOnMonitor);

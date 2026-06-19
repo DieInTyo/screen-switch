@@ -8,50 +8,68 @@ internal sealed class HotkeyCaptureForm : Form
     private const int VirtualKeyLeftWin = 0x5B;
     private const int VirtualKeyRightWin = 0x5C;
     private readonly LocalizedStrings _text;
+    private readonly UiTheme _theme;
     private readonly Label _hintLabel;
     private readonly Label _currentLabel;
+    private readonly Label _noteLabel;
 
-    public HotkeyCaptureForm(string actionName, HotkeyGesture? currentGesture, LocalizedStrings text)
+    public HotkeyCaptureForm(
+        string actionName,
+        HotkeyGesture? currentGesture,
+        LocalizedStrings text,
+        UiTheme theme,
+        Point? preferredLocation)
     {
         _text = text;
+        _theme = theme;
         Text = _text.HotkeyCaptureTitle(actionName);
-        StartPosition = FormStartPosition.CenterScreen;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = preferredLocation.HasValue ? FormStartPosition.Manual : FormStartPosition.CenterScreen;
+        FormBorderStyle = FormBorderStyle.FixedToolWindow;
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
+        TopMost = true;
         KeyPreview = true;
-        ClientSize = new Size(420, 150);
+        ClientSize = new Size(360, 118);
 
         _hintLabel = new Label
         {
             AutoSize = false,
-            TextAlign = ContentAlignment.MiddleCenter,
+            TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Top,
-            Height = 64,
+            Height = 40,
+            Padding = new Padding(10, 6, 10, 2),
             Text = _text.HotkeyCapturePrompt
         };
 
         _currentLabel = new Label
         {
             AutoSize = false,
-            TextAlign = ContentAlignment.MiddleCenter,
+            TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Top,
-            Height = 36,
+            Height = 30,
+            Padding = new Padding(10, 2, 10, 2),
             Text = _text.HotkeyCaptureCurrent(FormatGesture(currentGesture, _text))
         };
 
-        var noteLabel = new Label
+        _noteLabel = new Label
         {
             AutoSize = false,
-            TextAlign = ContentAlignment.MiddleCenter,
+            TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Fill,
+            Padding = new Padding(10, 2, 10, 8),
             Text = _text.HotkeyCaptureClearNote
         };
 
-        Controls.Add(noteLabel);
+        Controls.Add(_noteLabel);
         Controls.Add(_currentLabel);
         Controls.Add(_hintLabel);
+        ApplyTheme();
+
+        if (preferredLocation.HasValue)
+        {
+            Location = ClampLocation(preferredLocation.Value, Size);
+        }
     }
 
     public HotkeyGesture? SelectedGesture { get; private set; }
@@ -93,6 +111,25 @@ internal sealed class HotkeyCaptureForm : Form
         SelectedGesture = gesture;
         DialogResult = DialogResult.OK;
         Close();
+    }
+
+    private void ApplyTheme()
+    {
+        BackColor = _theme.Background;
+        ForeColor = _theme.Foreground;
+        foreach (var label in Controls.OfType<Label>())
+        {
+            label.BackColor = _theme.Background;
+            label.ForeColor = label == _noteLabel ? _theme.MutedForeground : _theme.Foreground;
+        }
+    }
+
+    private static Point ClampLocation(Point preferredLocation, Size size)
+    {
+        var area = Screen.FromPoint(preferredLocation).WorkingArea;
+        var x = Math.Clamp(preferredLocation.X + 8, area.Left, Math.Max(area.Left, area.Right - size.Width));
+        var y = Math.Clamp(preferredLocation.Y + 8, area.Top, Math.Max(area.Top, area.Bottom - size.Height));
+        return new Point(x, y);
     }
 
     private static bool IsWinKeyDown()

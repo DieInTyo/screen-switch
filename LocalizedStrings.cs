@@ -21,6 +21,42 @@ internal sealed class LocalizedStrings
     public string MoveSelectedWindows => IsRussian ? "Перенести выбранные" : "Move selected";
     public string MoveWindowDoubleClickHint => IsRussian ? "Двойной клик переносит одно окно" : "Double-click moves one window";
     public string MoveWindowPickerTitle => IsRussian ? "Перенести окно" : "Move window";
+    public string PickerTableView => IsRussian ? "Таблица" : "Table";
+    public string PickerTilesView => IsRussian ? "Плитки" : "Tiles";
+    public string ColumnMonitor => IsRussian ? "Монитор" : "Monitor";
+    public string ColumnApplication => IsRussian ? "Приложение" : "Application";
+    public string ColumnWindow => IsRussian ? "Окно" : "Window";
+    public string ColumnState => IsRussian ? "Состояние" : "State";
+    public string WindowStateOpen => IsRussian ? "Открыто" : "Open";
+    public string WindowStateMinimized => IsRussian ? "Свернуто" : "Minimized";
+    public string Overlay => IsRussian ? "Оверлей" : "Overlay";
+    public string ShowOverlay => IsRussian ? "Показывать оверлей" : "Show overlay";
+    public string OverlayDraggable => IsRussian ? "Перетаскивать" : "Draggable";
+    public string OverlayPosition => IsRussian ? "Положение" : "Position";
+    public string OverlayTopLeft => IsRussian ? "Сверху слева" : "Top left";
+    public string OverlayTopRight => IsRussian ? "Сверху справа" : "Top right";
+    public string OverlayBottomLeft => IsRussian ? "Снизу слева" : "Bottom left";
+    public string OverlayBottomRight => IsRussian ? "Снизу справа" : "Bottom right";
+    public string OverlayRefresh => IsRussian ? "Обновить" : "Refresh";
+    public string OverlayHide => IsRussian ? "Скрыть" : "Hide";
+    public string OverlaySettings => IsRussian ? "Настройки" : "Settings";
+    public string OverlayOpacity => IsRussian ? "Прозрачность" : "Opacity";
+    public string OverlayOpacityTitle => IsRussian ? "Прозрачность оверлея" : "Overlay opacity";
+    public string OverlayOpacityValue(int value) => IsRussian ? $"Прозрачность: {value}%" : $"Opacity: {value}%";
+    public string OverlayMore => IsRussian ? "Еще..." : "More...";
+    public string OverlayMoveSelected => IsRussian ? "Перенести" : "Move";
+    public string OverlayActiveButton => IsRussian ? "Активные" : "Active";
+    public string OverlayAllButton => IsRussian ? "Все" : "All";
+    public string OverlayMinimizeButton => IsRussian ? "Свернуть" : "Minimize";
+    public string OverlayRefreshButton => IsRussian ? "Обн." : "Refresh";
+    public string OverlayNoWindows => IsRussian ? "Нет окон" : "No windows";
+    public string OverlayWindowTooltip(string appName, string title)
+    {
+        return string.IsNullOrWhiteSpace(appName) || string.Equals(appName, title, StringComparison.CurrentCulture)
+            ? title
+            : $"{appName}: {title}";
+    }
+
     public string NoWindowsFound => IsRussian ? "Окна не найдены" : "No windows found";
     public string WindowMoved => IsRussian ? "Окно перенесено." : "Window moved.";
     public string WindowMoveFailed => IsRussian ? "Не удалось перенести выбранное окно." : "Could not move the selected window.";
@@ -36,6 +72,9 @@ internal sealed class LocalizedStrings
     public string MoveMinimizedWindows => IsRussian ? "Переносить свернутые окна" : "Move minimized windows";
     public string ShowNotifications => IsRussian ? "Показывать уведомления" : "Show notifications";
     public string StartWithWindows => IsRussian ? "Запускать вместе с Windows" : "Start with Windows";
+    public string Theme => IsRussian ? "Тема" : "Theme";
+    public string ThemeLight => IsRussian ? "Светлая" : "Light";
+    public string ThemeDark => IsRussian ? "Темная" : "Dark";
     public string LanguageMenu => IsRussian ? "Язык" : "Language";
     public string Exit => IsRussian ? "Выход" : "Exit";
     public string NotAssigned => IsRussian ? "Не назначено" : "Not assigned";
@@ -48,6 +87,8 @@ internal sealed class LocalizedStrings
     public string HotkeysEnabled => IsRussian ? "Горячие клавиши включены." : "Hotkeys enabled.";
     public string HotkeysDisabled => IsRussian ? "Горячие клавиши выключены." : "Hotkeys disabled.";
     public string HotkeysReset => IsRussian ? "Горячие клавиши сброшены." : "Hotkeys reset.";
+    public string OverlayShown => IsRussian ? "Оверлей включен." : "Overlay enabled.";
+    public string OverlayHidden => IsRussian ? "Оверлей выключен." : "Overlay disabled.";
     public string HotkeyCleared => IsRussian ? "горячая клавиша очищена." : "hotkey cleared.";
     public string InitialStatus => IsRussian ? "Левый клик выполняет выбранное действие из меню." : "Left click runs the selected menu action.";
     public string LanguageChanged => IsRussian ? "Язык изменен." : "Language changed.";

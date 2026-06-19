@@ -8,6 +8,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private const int NormalTrackerInterval = 250;
     private const int PendingTrackerInterval = 40;
     private readonly NotifyIcon _notifyIcon;
+    private readonly ContextMenuStrip _menu;
     private readonly SettingsStore _settingsStore;
     private readonly StartupManager _startupManager;
     private readonly System.Windows.Forms.Timer _foregroundTracker;
@@ -30,9 +31,24 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _hotkeyAllWindowsItem;
     private readonly ToolStripMenuItem _hotkeyMoveWindowItem;
     private readonly ToolStripMenuItem _hotkeyMinimizeAllWindowsItem;
+    private readonly ToolStripMenuItem _hotkeyToggleOverlayItem;
     private readonly ToolStripMenuItem _resetHotkeysItem;
+    private readonly ToolStripMenuItem _overlayMenu;
+    private readonly ToolStripMenuItem _overlayEnabledItem;
+    private readonly ToolStripMenuItem _overlayDraggableItem;
+    private readonly ToolStripMenuItem _overlayOpacityItem;
+    private readonly OpacitySliderControl _overlayOpacityTrackBar;
+    private readonly ToolStripControlHost _overlayOpacityTrackBarHost;
+    private readonly ToolStripMenuItem _overlayPositionMenu;
+    private readonly ToolStripMenuItem _overlayTopLeftItem;
+    private readonly ToolStripMenuItem _overlayTopRightItem;
+    private readonly ToolStripMenuItem _overlayBottomLeftItem;
+    private readonly ToolStripMenuItem _overlayBottomRightItem;
     private readonly ToolStripMenuItem _notificationsItem;
     private readonly ToolStripMenuItem _startupItem;
+    private readonly ToolStripMenuItem _themeMenu;
+    private readonly ToolStripMenuItem _lightThemeItem;
+    private readonly ToolStripMenuItem _darkThemeItem;
     private readonly ToolStripMenuItem _languageMenu;
     private readonly ToolStripMenuItem _englishLanguageItem;
     private readonly ToolStripMenuItem _russianLanguageItem;
@@ -43,6 +59,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private LocalizedStrings _text;
     private TrackedWindow _lastTrackedWindow;
     private MoveWindowPickerForm? _moveWindowPicker;
+    private OverlayForm? _overlayForm;
     private bool _allowMenuCloseOnce;
 
     public TrayAppContext()
@@ -53,24 +70,24 @@ internal sealed class TrayAppContext : ApplicationContext
         _settings = _settingsStore.Load();
         _text = LocalizedStrings.For(_settings.Language);
 
-        var menu = new ContextMenuStrip
+        _menu = new ContextMenuStrip
         {
             ShowItemToolTips = true
         };
-        menu.Closing += MenuOnClosing;
-        menu.Closed += (_, _) => _allowMenuCloseOnce = false;
+        _menu.Closing += MenuOnClosing;
+        _menu.Closed += (_, _) => _allowMenuCloseOnce = false;
         _moveActiveItem = new ToolStripMenuItem(string.Empty, null, (_, _) =>
         {
             AllowMenuClose();
             MoveActiveWindow();
         });
-        menu.Items.Add(_moveActiveItem);
+        _menu.Items.Add(_moveActiveItem);
         _moveAllItem = new ToolStripMenuItem(string.Empty, null, (_, _) =>
         {
             AllowMenuClose();
             MoveAllWindows();
         });
-        menu.Items.Add(_moveAllItem);
+        _menu.Items.Add(_moveAllItem);
         _moveWindowMenu = new ToolStripMenuItem();
         _moveWindowMenu.DropDownItems.Add(new ToolStripMenuItem(string.Empty)
         {
@@ -84,14 +101,14 @@ internal sealed class TrayAppContext : ApplicationContext
         };
         _moveWindowMenu.DropDown.Closing += MenuOnClosing;
         _moveSelectedWindowsItem = new ToolStripMenuItem(string.Empty, null, (_, _) => MoveSelectedWindows());
-        menu.Items.Add(_moveWindowMenu);
+        _menu.Items.Add(_moveWindowMenu);
         _minimizeAllItem = new ToolStripMenuItem(string.Empty, null, (_, _) =>
         {
             AllowMenuClose();
             MinimizeAllWindows();
         });
-        menu.Items.Add(_minimizeAllItem);
-        menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add(_minimizeAllItem);
+        _menu.Items.Add(new ToolStripSeparator());
 
         _leftClickMenu = new ToolStripMenuItem();
         _leftClickMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(_leftClickMenu);
@@ -106,7 +123,7 @@ internal sealed class TrayAppContext : ApplicationContext
         };
         _leftClickMenu.DropDownItems.Add(_leftClickActiveItem);
         _leftClickMenu.DropDownItems.Add(_leftClickAllItem);
-        menu.Items.Add(_leftClickMenu);
+        _menu.Items.Add(_leftClickMenu);
 
         _hotkeysMenu = new ToolStripMenuItem();
         _hotkeysMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(_hotkeysMenu);
@@ -117,11 +134,12 @@ internal sealed class TrayAppContext : ApplicationContext
             CheckOnClick = true,
             Checked = _settings.HotkeysEnabled
         };
-        _hotkeySelectedModeItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.SelectedMode));
-        _hotkeyActiveWindowItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.ActiveWindow));
-        _hotkeyAllWindowsItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.AllWindows));
-        _hotkeyMoveWindowItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.MoveWindow));
-        _hotkeyMinimizeAllWindowsItem = new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(HotkeyAction.MinimizeAllWindows));
+        _hotkeySelectedModeItem = CreateHotkeyRootItem(HotkeyAction.SelectedMode);
+        _hotkeyActiveWindowItem = CreateHotkeyRootItem(HotkeyAction.ActiveWindow);
+        _hotkeyAllWindowsItem = CreateHotkeyRootItem(HotkeyAction.AllWindows);
+        _hotkeyMoveWindowItem = CreateHotkeyRootItem(HotkeyAction.MoveWindow);
+        _hotkeyMinimizeAllWindowsItem = CreateHotkeyRootItem(HotkeyAction.MinimizeAllWindows);
+        _hotkeyToggleOverlayItem = CreateHotkeyRootItem(HotkeyAction.ToggleOverlay);
         _resetHotkeysItem = new ToolStripMenuItem(string.Empty, null, (_, _) => ResetHotkeys());
         _hotkeysMenu.DropDownItems.Add(_hotkeysEnabledItem);
         _hotkeysMenu.DropDownItems.Add(new ToolStripSeparator());
@@ -130,30 +148,85 @@ internal sealed class TrayAppContext : ApplicationContext
         _hotkeysMenu.DropDownItems.Add(_hotkeyAllWindowsItem);
         _hotkeysMenu.DropDownItems.Add(_hotkeyMoveWindowItem);
         _hotkeysMenu.DropDownItems.Add(_hotkeyMinimizeAllWindowsItem);
+        _hotkeysMenu.DropDownItems.Add(_hotkeyToggleOverlayItem);
         _hotkeysMenu.DropDownItems.Add(new ToolStripSeparator());
         _hotkeysMenu.DropDownItems.Add(_resetHotkeysItem);
-        menu.Items.Add(_hotkeysMenu);
+        _menu.Items.Add(_hotkeysMenu);
+
+        _overlayMenu = new ToolStripMenuItem();
+        _overlayMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(_overlayMenu);
+        _overlayMenu.DropDown.Closing += MenuOnClosing;
+        _overlayEnabledItem = new ToolStripMenuItem(string.Empty)
+        {
+            CheckOnClick = true,
+            Checked = _settings.OverlayEnabled
+        };
+        _overlayEnabledItem.Click += (_, _) => SetOverlayEnabled(_overlayEnabledItem.Checked, showStatus: true);
+        _overlayDraggableItem = new ToolStripMenuItem(string.Empty)
+        {
+            CheckOnClick = true,
+            Checked = _settings.OverlayDraggable
+        };
+        _overlayDraggableItem.Click += (_, _) => SetOverlayDraggable(_overlayDraggableItem.Checked);
+        _overlayOpacityItem = new ToolStripMenuItem(string.Empty)
+        {
+            Enabled = false
+        };
+        _overlayOpacityTrackBar = CreateOpacityTrackBar();
+        _overlayOpacityTrackBarHost = CreateOpacitySliderHost(_overlayOpacityTrackBar);
+        _overlayPositionMenu = new ToolStripMenuItem();
+        _overlayPositionMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(_overlayPositionMenu);
+        _overlayPositionMenu.DropDown.Closing += MenuOnClosing;
+        _overlayTopLeftItem = CreateOverlayPositionItem(OverlayPosition.TopLeft);
+        _overlayTopRightItem = CreateOverlayPositionItem(OverlayPosition.TopRight);
+        _overlayBottomLeftItem = CreateOverlayPositionItem(OverlayPosition.BottomLeft);
+        _overlayBottomRightItem = CreateOverlayPositionItem(OverlayPosition.BottomRight);
+        _overlayPositionMenu.DropDownItems.Add(_overlayTopLeftItem);
+        _overlayPositionMenu.DropDownItems.Add(_overlayTopRightItem);
+        _overlayPositionMenu.DropDownItems.Add(_overlayBottomLeftItem);
+        _overlayPositionMenu.DropDownItems.Add(_overlayBottomRightItem);
+        _overlayMenu.DropDownItems.Add(_overlayEnabledItem);
+        _overlayMenu.DropDownItems.Add(_overlayDraggableItem);
+        _overlayMenu.DropDownItems.Add(_overlayOpacityItem);
+        _overlayMenu.DropDownItems.Add(_overlayOpacityTrackBarHost);
+        _overlayMenu.DropDownItems.Add(_overlayPositionMenu);
+        _menu.Items.Add(_overlayMenu);
 
         _moveMinimizedItem = new ToolStripMenuItem(string.Empty, null, ToggleMoveMinimizedWindows)
         {
             CheckOnClick = true,
             Checked = _settings.MoveMinimizedWindows
         };
-        menu.Items.Add(_moveMinimizedItem);
+        _menu.Items.Add(_moveMinimizedItem);
 
         _notificationsItem = new ToolStripMenuItem(string.Empty, null, ToggleNotifications)
         {
             CheckOnClick = true,
             Checked = _settings.ShowNotifications
         };
-        menu.Items.Add(_notificationsItem);
+        _menu.Items.Add(_notificationsItem);
 
         _startupItem = new ToolStripMenuItem(string.Empty, null, ToggleStartup)
         {
             CheckOnClick = true,
             Checked = _startupManager.IsEnabled()
         };
-        menu.Items.Add(_startupItem);
+        _menu.Items.Add(_startupItem);
+
+        _themeMenu = new ToolStripMenuItem();
+        _themeMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(_themeMenu);
+        _themeMenu.DropDown.Closing += MenuOnClosing;
+        _lightThemeItem = new ToolStripMenuItem(string.Empty, null, (_, _) => SetTheme(AppTheme.Light))
+        {
+            CheckOnClick = true
+        };
+        _darkThemeItem = new ToolStripMenuItem(string.Empty, null, (_, _) => SetTheme(AppTheme.Dark))
+        {
+            CheckOnClick = true
+        };
+        _themeMenu.DropDownItems.Add(_lightThemeItem);
+        _themeMenu.DropDownItems.Add(_darkThemeItem);
+        _menu.Items.Add(_themeMenu);
 
         _languageMenu = new ToolStripMenuItem();
         _languageMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(_languageMenu);
@@ -168,26 +241,28 @@ internal sealed class TrayAppContext : ApplicationContext
         };
         _languageMenu.DropDownItems.Add(_englishLanguageItem);
         _languageMenu.DropDownItems.Add(_russianLanguageItem);
-        menu.Items.Add(_languageMenu);
-        menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add(_languageMenu);
+        _menu.Items.Add(new ToolStripSeparator());
         _exitItem = new ToolStripMenuItem(string.Empty, null, (_, _) =>
         {
             AllowMenuClose();
             ExitThread();
         });
-        menu.Items.Add(_exitItem);
+        _menu.Items.Add(_exitItem);
 
         _notifyIcon = new NotifyIcon
         {
             Icon = TrayIconFactory.Create(),
             Text = "Screen Switch",
             Visible = true,
-            ContextMenuStrip = menu
+            ContextMenuStrip = _menu
         };
 
         ApplyLeftClickChecks();
         ApplyLanguageChecks();
+        ApplyOverlayChecks();
         ApplyUiText();
+        ApplyTheme();
 
         _hotkeyManager = new HotkeyManager();
         _hotkeyManager.HotkeyPressed += OnHotkeyPressed;
@@ -201,6 +276,10 @@ internal sealed class TrayAppContext : ApplicationContext
         _foregroundTracker.Tick += TrackForegroundWindow;
         _foregroundTracker.Start();
         ShowStatus(_text.InitialStatus);
+        if (_settings.OverlayEnabled)
+        {
+            ShowOverlay(showStatus: false);
+        }
     }
 
     protected override void ExitThreadCore()
@@ -208,6 +287,10 @@ internal sealed class TrayAppContext : ApplicationContext
         _foregroundTracker.Stop();
         _foregroundTracker.Dispose();
         _hotkeyManager.Dispose();
+        _overlayForm?.Close();
+        _overlayForm?.Dispose();
+        _moveWindowPicker?.Close();
+        _moveWindowPicker?.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Icon?.Dispose();
         _notifyIcon.Dispose();
@@ -274,6 +357,16 @@ internal sealed class TrayAppContext : ApplicationContext
         _moveWindowPicker = new MoveWindowPickerForm(
             _windowMover,
             _text,
+            UiTheme.For(_settings.Theme),
+            _settings.MoveWindowPickerView,
+            view =>
+            {
+                _settings.MoveWindowPickerView = view;
+                _settingsStore.Save(_settings);
+            },
+            MoveActiveWindow,
+            MoveAllWindows,
+            MinimizeAllWindows,
             movedCount =>
             {
                 UpdateTrackerInterval();
@@ -287,6 +380,72 @@ internal sealed class TrayAppContext : ApplicationContext
         _moveWindowPicker.FormClosed += (_, _) => _moveWindowPicker = null;
         _moveWindowPicker.Show();
         _moveWindowPicker.Activate();
+    }
+
+    private void ShowOverlay(bool showStatus)
+    {
+        if (_overlayForm is { IsDisposed: false })
+        {
+            _overlayForm.Place(_settings.OverlayPosition, _settings.OverlayCustomLocation, _settings.OverlayUseCustomLocation);
+            _overlayForm.Activate();
+            return;
+        }
+
+        DiagnosticLog.Info("overlay shown");
+        _overlayForm = new OverlayForm(
+            _windowMover,
+            _text,
+            UiTheme.For(_settings.Theme),
+            _settings.OverlayOpacity,
+            _settings.OverlayDraggable,
+            movedCount =>
+            {
+                UpdateTrackerInterval();
+                ShowStatus($"{_text.MovedWindowsPrefix}: {movedCount}.");
+            },
+            ex =>
+            {
+                UpdateTrackerInterval();
+                ShowStatus(LocalizeError(ex), ToolTipIcon.Warning);
+            },
+            ShowMoveWindowPicker,
+            MoveActiveWindow,
+            MoveAllWindows,
+            MinimizeAllWindows,
+            () => SetOverlayEnabled(false, showStatus: true),
+            location =>
+            {
+                _settings.OverlayCustomLocation = new OverlayLocation
+                {
+                    X = location.X,
+                    Y = location.Y
+                };
+                _settings.OverlayUseCustomLocation = true;
+                _settingsStore.Save(_settings);
+            },
+            ShowOverlaySettingsMenu);
+        _overlayForm.FormClosed += (_, _) => _overlayForm = null;
+        _overlayForm.Show();
+        _overlayForm.Place(_settings.OverlayPosition, _settings.OverlayCustomLocation, _settings.OverlayUseCustomLocation);
+
+        if (showStatus)
+        {
+            ShowStatus(_text.OverlayShown);
+        }
+    }
+
+    private void HideOverlay(bool showStatus)
+    {
+        DiagnosticLog.Info("overlay hidden");
+        if (_overlayForm is { IsDisposed: false })
+        {
+            _overlayForm.Close();
+        }
+
+        if (showStatus)
+        {
+            ShowStatus(_text.OverlayHidden);
+        }
     }
 
     private void MoveSpecificWindow(MovableWindowInfo window)
@@ -367,6 +526,7 @@ internal sealed class TrayAppContext : ApplicationContext
             {
                 Enabled = false
             });
+            UiTheme.For(_settings.Theme).ApplyToMenu(_moveWindowMenu.DropDown);
             return;
         }
 
@@ -399,6 +559,7 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             Enabled = false
         });
+        UiTheme.For(_settings.Theme).ApplyToMenu(_moveWindowMenu.DropDown);
     }
 
     private ToolStripMenuItem CreateWindowMenuItem(string label, MovableWindowInfo window)
@@ -415,6 +576,14 @@ internal sealed class TrayAppContext : ApplicationContext
         item.DoubleClick += (_, _) => MoveSpecificWindow(window);
 
         return item;
+    }
+
+    private ToolStripMenuItem CreateOverlayPositionItem(OverlayPosition position)
+    {
+        return new ToolStripMenuItem(string.Empty, null, (_, _) => SetOverlayPosition(position))
+        {
+            CheckOnClick = true
+        };
     }
 
     private void ToggleMoveWindowSelection(IntPtr handle, bool selected)
@@ -510,6 +679,22 @@ internal sealed class TrayAppContext : ApplicationContext
         _russianLanguageItem.Checked = _settings.Language == AppLanguage.Russian;
     }
 
+    private void ApplyOverlayChecks()
+    {
+        _overlayEnabledItem.Checked = _settings.OverlayEnabled;
+        _overlayDraggableItem.Checked = _settings.OverlayDraggable;
+        _overlayTopLeftItem.Checked = _settings.OverlayPosition == OverlayPosition.TopLeft;
+        _overlayTopRightItem.Checked = _settings.OverlayPosition == OverlayPosition.TopRight;
+        _overlayBottomLeftItem.Checked = _settings.OverlayPosition == OverlayPosition.BottomLeft;
+        _overlayBottomRightItem.Checked = _settings.OverlayPosition == OverlayPosition.BottomRight;
+    }
+
+    private void ApplyThemeChecks()
+    {
+        _lightThemeItem.Checked = _settings.Theme == AppTheme.Light;
+        _darkThemeItem.Checked = _settings.Theme == AppTheme.Dark;
+    }
+
     private void ApplyUiText()
     {
         _moveActiveItem.Text = _text.MoveActiveWindow;
@@ -522,12 +707,37 @@ internal sealed class TrayAppContext : ApplicationContext
         _hotkeysMenu.Text = _text.Hotkeys;
         _hotkeysEnabledItem.Text = _text.EnableHotkeys;
         _resetHotkeysItem.Text = _text.ResetHotkeys;
+        _overlayMenu.Text = _text.Overlay;
+        _overlayEnabledItem.Text = _text.ShowOverlay;
+        _overlayDraggableItem.Text = _text.OverlayDraggable;
+        _overlayOpacityItem.Text = _text.OverlayOpacityValue(_settings.OverlayOpacity);
+        _overlayPositionMenu.Text = _text.OverlayPosition;
+        _overlayTopLeftItem.Text = _text.OverlayTopLeft;
+        _overlayTopRightItem.Text = _text.OverlayTopRight;
+        _overlayBottomLeftItem.Text = _text.OverlayBottomLeft;
+        _overlayBottomRightItem.Text = _text.OverlayBottomRight;
         _moveMinimizedItem.Text = _text.MoveMinimizedWindows;
         _notificationsItem.Text = _text.ShowNotifications;
         _startupItem.Text = _text.StartWithWindows;
+        _themeMenu.Text = _text.Theme;
+        _lightThemeItem.Text = _text.ThemeLight;
+        _darkThemeItem.Text = _text.ThemeDark;
         _languageMenu.Text = _text.LanguageMenu;
         _exitItem.Text = _text.Exit;
+        _overlayForm?.SetText(_text);
+        ApplyOverlayChecks();
+        ApplyThemeChecks();
         UpdateHotkeyMenuText();
+    }
+
+    private void ApplyTheme()
+    {
+        var theme = UiTheme.For(_settings.Theme);
+        theme.ApplyToMenu(_menu);
+        _overlayForm?.ApplyTheme(theme);
+        StyleOpacityTrackBar(_overlayOpacityTrackBar, theme);
+
+        ApplyThemeChecks();
     }
 
     private void MenuOnClosing(object? sender, ToolStripDropDownClosingEventArgs e)
@@ -579,7 +789,339 @@ internal sealed class TrayAppContext : ApplicationContext
         _text = LocalizedStrings.For(language);
         ApplyLanguageChecks();
         ApplyUiText();
+        ApplyTheme();
+        UpdateHotkeyMenuText();
         ShowStatus(_text.LanguageChanged);
+    }
+
+    private void SetOverlayEnabled(bool enabled, bool showStatus)
+    {
+        _settings.OverlayEnabled = enabled;
+        _settingsStore.Save(_settings);
+        ApplyOverlayChecks();
+
+        if (enabled)
+        {
+            ShowOverlay(showStatus);
+        }
+        else
+        {
+            HideOverlay(showStatus);
+        }
+
+        DiagnosticLog.Info($"overlay toggled enabled={enabled}");
+    }
+
+    private void ToggleOverlay()
+    {
+        SetOverlayEnabled(!_settings.OverlayEnabled, showStatus: true);
+    }
+
+    private void SetOverlayDraggable(bool draggable)
+    {
+        _settings.OverlayDraggable = draggable;
+        _settingsStore.Save(_settings);
+        ApplyOverlayChecks();
+        _overlayForm?.SetDraggable(draggable);
+        DiagnosticLog.Info($"overlay draggable changed enabled={draggable}");
+    }
+
+    private void SetOverlayPosition(OverlayPosition position)
+    {
+        _settings.OverlayPosition = position;
+        _settings.OverlayUseCustomLocation = false;
+        _settingsStore.Save(_settings);
+        ApplyOverlayChecks();
+        _overlayForm?.Place(_settings.OverlayPosition, _settings.OverlayCustomLocation, useCustomLocation: false);
+        DiagnosticLog.Info($"overlay position changed position={position}");
+    }
+
+    private void SetOverlayOpacity(int opacity)
+    {
+        opacity = NormalizeOverlayOpacity(opacity);
+        _settings.OverlayOpacity = opacity;
+        _settingsStore.Save(_settings);
+        _overlayOpacityItem.Text = _text.OverlayOpacityValue(opacity);
+        if (_overlayOpacityTrackBar.Value != opacity)
+        {
+            _overlayOpacityTrackBar.Value = opacity;
+        }
+
+        _overlayForm?.SetOpacityPercent(opacity);
+        DiagnosticLog.Info($"overlay opacity changed value={opacity}");
+    }
+
+    private OpacitySliderControl CreateOpacityTrackBar()
+    {
+        var slider = new OpacitySliderControl
+        {
+            Value = NormalizeOverlayOpacity(_settings.OverlayOpacity),
+            Width = 126,
+            Height = 14
+        };
+        slider.ValueChanged += (_, _) =>
+        {
+            var value = NormalizeOverlayOpacity(slider.Value);
+            if (slider.Value != value)
+            {
+                slider.Value = value;
+                return;
+            }
+
+            SetOverlayOpacity(value);
+        };
+        slider.ApplyTheme(UiTheme.For(_settings.Theme));
+        return slider;
+    }
+
+    private static void StyleOpacityTrackBar(OpacitySliderControl slider, UiTheme theme)
+    {
+        slider.ApplyTheme(theme);
+    }
+
+    private ToolStripControlHost CreateOpacitySliderHost(OpacitySliderControl? slider = null)
+    {
+        slider ??= CreateOpacityTrackBar();
+        return new ToolStripControlHost(slider)
+        {
+            AutoSize = false,
+            Margin = new Padding(8, 0, 8, 0),
+            Size = new Size(132, 14)
+        };
+    }
+
+    private void ShowOverlaySettingsMenu(Control anchor)
+    {
+        var settingsMenu = new ContextMenuStrip
+        {
+            ShowItemToolTips = true
+        };
+        settingsMenu.Closing += MenuOnClosing;
+        settingsMenu.Closed += (_, _) =>
+        {
+            _allowMenuCloseOnce = false;
+        };
+
+        var overlayEnabledItem = CreateCheckItem(_text.ShowOverlay, _settings.OverlayEnabled, item => SetOverlayEnabled(item.Checked, showStatus: true));
+        var overlayDraggableItem = CreateCheckItem(_text.OverlayDraggable, _settings.OverlayDraggable, item => SetOverlayDraggable(item.Checked));
+        var opacityItem = new ToolStripMenuItem(_text.OverlayOpacityValue(_settings.OverlayOpacity))
+        {
+            Enabled = false
+        };
+        var opacityTrackBar = CreateOpacityTrackBar();
+        opacityTrackBar.ValueChanged += (_, _) =>
+        {
+            opacityItem.Text = _text.OverlayOpacityValue(NormalizeOverlayOpacity(opacityTrackBar.Value));
+        };
+        var positionMenu = CreateOverlayPositionMenu();
+        var themeMenu = CreateThemeMenu(settingsMenu);
+
+        settingsMenu.Items.Add(overlayEnabledItem);
+        settingsMenu.Items.Add(overlayDraggableItem);
+        settingsMenu.Items.Add(opacityItem);
+        settingsMenu.Items.Add(CreateOpacitySliderHost(opacityTrackBar));
+        settingsMenu.Items.Add(positionMenu);
+        settingsMenu.Items.Add(themeMenu);
+        settingsMenu.Items.Add(new ToolStripSeparator());
+        settingsMenu.Items.Add(CreateHotkeysMenu());
+        settingsMenu.Items.Add(CreateCheckItem(_text.MoveMinimizedWindows, _settings.MoveMinimizedWindows, item =>
+        {
+            _moveMinimizedItem.Checked = item.Checked;
+            ToggleMoveMinimizedWindows(null, EventArgs.Empty);
+        }));
+        settingsMenu.Items.Add(CreateCheckItem(_text.ShowNotifications, _settings.ShowNotifications, item =>
+        {
+            _notificationsItem.Checked = item.Checked;
+            ToggleNotifications(null, EventArgs.Empty);
+        }));
+        settingsMenu.Items.Add(CreateCheckItem(_text.StartWithWindows, _startupManager.IsEnabled(), item =>
+        {
+            _startupItem.Checked = item.Checked;
+            ToggleStartup(null, EventArgs.Empty);
+        }));
+        settingsMenu.Items.Add(CreateLanguageMenu());
+        settingsMenu.Items.Add(new ToolStripSeparator());
+        settingsMenu.Items.Add(new ToolStripMenuItem(_text.Exit, null, (_, _) =>
+        {
+            AllowMenuClose();
+            ExitThread();
+        }));
+
+        UiTheme.For(_settings.Theme).ApplyToMenu(settingsMenu);
+        ShowMenuNearControl(settingsMenu, anchor);
+    }
+
+    private static void ShowMenuNearControl(ContextMenuStrip menu, Control anchor)
+    {
+        var area = Screen.FromControl(anchor).WorkingArea;
+        var preferred = menu.GetPreferredSize(Size.Empty);
+        const int gap = 5;
+        var below = anchor.PointToScreen(new Point(0, anchor.Height + gap));
+        var x = below.X;
+        var y = below.Y;
+
+        if (x + preferred.Width > area.Right)
+        {
+            x = anchor.PointToScreen(new Point(anchor.Width, 0)).X - preferred.Width - gap;
+        }
+
+        if (y + preferred.Height > area.Bottom)
+        {
+            y = anchor.PointToScreen(Point.Empty).Y - preferred.Height - gap;
+        }
+
+        x = Math.Clamp(x, area.Left, Math.Max(area.Left, area.Right - preferred.Width));
+        y = Math.Clamp(y, area.Top, Math.Max(area.Top, area.Bottom - preferred.Height));
+        menu.Show(new Point(x, y));
+    }
+
+    private ToolStripMenuItem CreateCheckItem(string text, bool isChecked, Action<ToolStripMenuItem> onClick)
+    {
+        var item = new ToolStripMenuItem(text)
+        {
+            CheckOnClick = true,
+            Checked = isChecked
+        };
+        item.Click += (_, _) => onClick(item);
+        return item;
+    }
+
+    private ToolStripMenuItem CreateOverlayPositionMenu()
+    {
+        var menu = new ToolStripMenuItem(_text.OverlayPosition);
+        menu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(menu);
+        menu.DropDown.Closing += MenuOnClosing;
+        menu.DropDownItems.Add(CreateOverlaySettingsPositionItem(_text.OverlayTopLeft, OverlayPosition.TopLeft));
+        menu.DropDownItems.Add(CreateOverlaySettingsPositionItem(_text.OverlayTopRight, OverlayPosition.TopRight));
+        menu.DropDownItems.Add(CreateOverlaySettingsPositionItem(_text.OverlayBottomLeft, OverlayPosition.BottomLeft));
+        menu.DropDownItems.Add(CreateOverlaySettingsPositionItem(_text.OverlayBottomRight, OverlayPosition.BottomRight));
+        return menu;
+    }
+
+    private ToolStripMenuItem CreateOverlaySettingsPositionItem(string text, OverlayPosition position)
+    {
+        return new ToolStripMenuItem(text, null, (_, _) => SetOverlayPosition(position))
+        {
+            CheckOnClick = true,
+            Checked = _settings.OverlayPosition == position
+        };
+    }
+
+    private ToolStripMenuItem CreateThemeMenu(ContextMenuStrip parentMenu)
+    {
+        var menu = new ToolStripMenuItem(_text.Theme);
+        menu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(menu);
+        menu.DropDown.Closing += MenuOnClosing;
+        var lightItem = new ToolStripMenuItem(_text.ThemeLight)
+        {
+            CheckOnClick = true,
+            Checked = _settings.Theme == AppTheme.Light
+        };
+        var darkItem = new ToolStripMenuItem(_text.ThemeDark)
+        {
+            CheckOnClick = true,
+            Checked = _settings.Theme == AppTheme.Dark
+        };
+
+        lightItem.Click += (_, _) =>
+        {
+            SetTheme(AppTheme.Light);
+            lightItem.Checked = true;
+            darkItem.Checked = false;
+            UiTheme.For(_settings.Theme).ApplyToMenu(parentMenu);
+        };
+        darkItem.Click += (_, _) =>
+        {
+            SetTheme(AppTheme.Dark);
+            lightItem.Checked = false;
+            darkItem.Checked = true;
+            UiTheme.For(_settings.Theme).ApplyToMenu(parentMenu);
+        };
+
+        menu.DropDownItems.Add(lightItem);
+        menu.DropDownItems.Add(darkItem);
+        return menu;
+    }
+
+    private ToolStripMenuItem CreateHotkeysMenu()
+    {
+        var menu = new ToolStripMenuItem(_text.Hotkeys);
+        menu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(menu);
+        menu.DropDown.ShowItemToolTips = true;
+        menu.DropDown.Closing += MenuOnClosing;
+        menu.DropDownItems.Add(CreateCheckItem(_text.EnableHotkeys, _settings.HotkeysEnabled, item => SetHotkeysEnabled(item.Checked, showStatus: true)));
+        menu.DropDownItems.Add(new ToolStripSeparator());
+        menu.DropDownItems.Add(CreateHotkeyMenuItem(_text.SelectedMode, _settings.SelectedModeHotkey, HotkeyAction.SelectedMode));
+        menu.DropDownItems.Add(CreateHotkeyMenuItem(_text.ActiveWindow, _settings.ActiveWindowHotkey, HotkeyAction.ActiveWindow));
+        menu.DropDownItems.Add(CreateHotkeyMenuItem(_text.AllWindows, _settings.AllWindowsHotkey, HotkeyAction.AllWindows));
+        menu.DropDownItems.Add(CreateHotkeyMenuItem(_text.MoveWindow, _settings.MoveWindowHotkey, HotkeyAction.MoveWindow));
+        menu.DropDownItems.Add(CreateHotkeyMenuItem(_text.MinimizeAllWindows, _settings.MinimizeAllWindowsHotkey, HotkeyAction.MinimizeAllWindows));
+        menu.DropDownItems.Add(CreateHotkeyMenuItem(_text.Overlay, _settings.ToggleOverlayHotkey, HotkeyAction.ToggleOverlay));
+        menu.DropDownItems.Add(new ToolStripSeparator());
+        menu.DropDownItems.Add(new ToolStripMenuItem(_text.ResetHotkeys, null, (_, _) => ResetHotkeys()));
+        return menu;
+    }
+
+    private ToolStripMenuItem CreateHotkeyRootItem(HotkeyAction action)
+    {
+        return new ToolStripMenuItem(string.Empty, null, (_, _) => CaptureHotkey(action, Cursor.Position));
+    }
+
+    private ToolStripMenuItem CreateHotkeyMenuItem(string label, HotkeyGesture? gesture, HotkeyAction action)
+    {
+        var item = new ToolStripMenuItem(label, null, (_, _) => CaptureHotkey(action, Cursor.Position))
+        {
+            ShowShortcutKeys = true,
+            ShortcutKeyDisplayString = FormatHotkey(gesture),
+            ToolTipText = _text.AssignHotkeyTooltip
+        };
+        if (_hotkeyRegistrationErrors.TryGetValue(action, out var failure))
+        {
+            item.ForeColor = _settings.Theme == AppTheme.Dark ? Color.IndianRed : Color.Firebrick;
+            item.ToolTipText = GetHotkeyFailureMessage(failure);
+        }
+
+        return item;
+    }
+
+    private ToolStripMenuItem CreateLanguageMenu()
+    {
+        var menu = new ToolStripMenuItem(_text.LanguageMenu);
+        menu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(menu);
+        menu.DropDown.Closing += MenuOnClosing;
+        menu.DropDownItems.Add(new ToolStripMenuItem("English", null, (_, _) => SetLanguage(AppLanguage.English))
+        {
+            CheckOnClick = true,
+            Checked = _settings.Language == AppLanguage.English
+        });
+        menu.DropDownItems.Add(new ToolStripMenuItem("Русский", null, (_, _) => SetLanguage(AppLanguage.Russian))
+        {
+            CheckOnClick = true,
+            Checked = _settings.Language == AppLanguage.Russian
+        });
+        return menu;
+    }
+
+    private static int NormalizeOverlayOpacity(int opacity)
+    {
+        var clamped = Math.Clamp(opacity, 50, 100);
+        return (int)(Math.Round(clamped / 5.0, MidpointRounding.AwayFromZero) * 5);
+    }
+
+    private void SetTheme(AppTheme theme)
+    {
+        if (_settings.Theme == theme)
+        {
+            ApplyThemeChecks();
+            return;
+        }
+
+        _settings.Theme = theme;
+        _settingsStore.Save(_settings);
+        _moveWindowPicker?.Close();
+        ApplyTheme();
+        UpdateHotkeyMenuText();
+        DiagnosticLog.Info($"theme changed theme={theme}");
     }
 
     private void OnHotkeyPressed(HotkeyAction action)
@@ -601,25 +1143,42 @@ internal sealed class TrayAppContext : ApplicationContext
             case HotkeyAction.MinimizeAllWindows:
                 MinimizeAllWindows();
                 break;
+            case HotkeyAction.ToggleOverlay:
+                ToggleOverlay();
+                break;
         }
     }
 
     private void ToggleHotkeys(object? sender, EventArgs e)
     {
-        _settings.HotkeysEnabled = _hotkeysEnabledItem.Checked;
-        _settingsStore.Save(_settings);
-        ApplyHotkeyRegistrations(showFailures: true);
-        ShowStatus(_settings.HotkeysEnabled
-            ? _text.HotkeysEnabled
-            : _text.HotkeysDisabled);
+        SetHotkeysEnabled(_hotkeysEnabledItem.Checked, showStatus: true);
     }
 
-    private void CaptureHotkey(HotkeyAction action)
+    private void SetHotkeysEnabled(bool enabled, bool showStatus)
+    {
+        _settings.HotkeysEnabled = enabled;
+        _hotkeysEnabledItem.Checked = enabled;
+        _settingsStore.Save(_settings);
+        ApplyHotkeyRegistrations(showFailures: true);
+        if (showStatus)
+        {
+            ShowStatus(_settings.HotkeysEnabled
+                ? _text.HotkeysEnabled
+                : _text.HotkeysDisabled);
+        }
+    }
+
+    private void CaptureHotkey(HotkeyAction action, Point? preferredLocation = null)
     {
         _hotkeyManager.UnregisterAll();
         try
         {
-            using var dialog = new HotkeyCaptureForm(GetHotkeyActionName(action), GetHotkeyGesture(action), _text);
+            using var dialog = new HotkeyCaptureForm(
+                GetHotkeyActionName(action),
+                GetHotkeyGesture(action),
+                _text,
+                UiTheme.For(_settings.Theme),
+                preferredLocation);
             if (dialog.ShowDialog() != DialogResult.OK)
             {
                 return;
@@ -645,6 +1204,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _settings.AllWindowsHotkey = null;
         _settings.MoveWindowHotkey = null;
         _settings.MinimizeAllWindowsHotkey = null;
+        _settings.ToggleOverlayHotkey = null;
         _settingsStore.Save(_settings);
         UpdateHotkeyMenuText();
         ApplyHotkeyRegistrations(showFailures: true);
@@ -675,6 +1235,7 @@ internal sealed class TrayAppContext : ApplicationContext
         UpdateHotkeyMenuItem(_hotkeyAllWindowsItem, _text.AllWindows, _settings.AllWindowsHotkey, HotkeyAction.AllWindows);
         UpdateHotkeyMenuItem(_hotkeyMoveWindowItem, _text.MoveWindow, _settings.MoveWindowHotkey, HotkeyAction.MoveWindow);
         UpdateHotkeyMenuItem(_hotkeyMinimizeAllWindowsItem, _text.MinimizeAllWindows, _settings.MinimizeAllWindowsHotkey, HotkeyAction.MinimizeAllWindows);
+        UpdateHotkeyMenuItem(_hotkeyToggleOverlayItem, _text.Overlay, _settings.ToggleOverlayHotkey, HotkeyAction.ToggleOverlay);
     }
 
     private void UpdateHotkeyMenuItem(
@@ -683,15 +1244,17 @@ internal sealed class TrayAppContext : ApplicationContext
         HotkeyGesture? gesture,
         HotkeyAction action)
     {
-        item.Text = $"{label}: {FormatHotkey(gesture)}";
+        item.Text = label;
+        item.ShowShortcutKeys = true;
+        item.ShortcutKeyDisplayString = FormatHotkey(gesture);
         if (_hotkeyRegistrationErrors.TryGetValue(action, out var failure))
         {
-            item.ForeColor = Color.Firebrick;
+            item.ForeColor = _settings.Theme == AppTheme.Dark ? Color.IndianRed : Color.Firebrick;
             item.ToolTipText = GetHotkeyFailureMessage(failure);
             return;
         }
 
-        item.ForeColor = SystemColors.MenuText;
+        item.ForeColor = UiTheme.For(_settings.Theme).Foreground;
         item.ToolTipText = _text.AssignHotkeyTooltip;
     }
 
@@ -704,6 +1267,7 @@ internal sealed class TrayAppContext : ApplicationContext
             HotkeyAction.AllWindows => _settings.AllWindowsHotkey?.Clone(),
             HotkeyAction.MoveWindow => _settings.MoveWindowHotkey?.Clone(),
             HotkeyAction.MinimizeAllWindows => _settings.MinimizeAllWindowsHotkey?.Clone(),
+            HotkeyAction.ToggleOverlay => _settings.ToggleOverlayHotkey?.Clone(),
             _ => null
         };
     }
@@ -727,6 +1291,9 @@ internal sealed class TrayAppContext : ApplicationContext
             case HotkeyAction.MinimizeAllWindows:
                 _settings.MinimizeAllWindowsHotkey = gesture;
                 break;
+            case HotkeyAction.ToggleOverlay:
+                _settings.ToggleOverlayHotkey = gesture;
+                break;
         }
     }
 
@@ -746,6 +1313,7 @@ internal sealed class TrayAppContext : ApplicationContext
             HotkeyAction.AllWindows => _text.AllWindows,
             HotkeyAction.MoveWindow => _text.MoveWindow,
             HotkeyAction.MinimizeAllWindows => _text.MinimizeAllWindows,
+            HotkeyAction.ToggleOverlay => _text.Overlay,
             _ => "Action"
         };
     }

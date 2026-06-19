@@ -56,12 +56,21 @@ internal sealed class AppSettings
     public LeftClickAction LeftClickAction { get; set; } = LeftClickAction.ActiveWindow;
     public bool ShowNotifications { get; set; } = true;
     public bool MoveMinimizedWindows { get; set; } = true;
+    public bool OverlayEnabled { get; set; }
+    public bool OverlayDraggable { get; set; }
+    public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomRight;
+    public OverlayLocation? OverlayCustomLocation { get; set; }
+    public bool OverlayUseCustomLocation { get; set; }
+    public int OverlayOpacity { get; set; } = 100;
+    public AppTheme Theme { get; set; } = AppTheme.Light;
+    public MoveWindowPickerView MoveWindowPickerView { get; set; } = MoveWindowPickerView.Table;
     public bool HotkeysEnabled { get; set; }
     public HotkeyGesture? SelectedModeHotkey { get; set; }
     public HotkeyGesture? ActiveWindowHotkey { get; set; }
     public HotkeyGesture? AllWindowsHotkey { get; set; }
     public HotkeyGesture? MoveWindowHotkey { get; set; }
     public HotkeyGesture? MinimizeAllWindowsHotkey { get; set; }
+    public HotkeyGesture? ToggleOverlayHotkey { get; set; }
     public AppLanguage Language { get; set; } = AppLanguage.English;
 }
 
@@ -77,7 +86,34 @@ internal enum HotkeyAction
     ActiveWindow = 1,
     AllWindows = 2,
     MoveWindow = 3,
-    MinimizeAllWindows = 4
+    MinimizeAllWindows = 4,
+    ToggleOverlay = 5
+}
+
+internal enum OverlayPosition
+{
+    TopLeft = 0,
+    TopRight = 1,
+    BottomLeft = 2,
+    BottomRight = 3
+}
+
+internal sealed class OverlayLocation
+{
+    public int X { get; set; }
+    public int Y { get; set; }
+}
+
+internal enum AppTheme
+{
+    Light = 0,
+    Dark = 1
+}
+
+internal enum MoveWindowPickerView
+{
+    Table = 0,
+    Tiles = 1
 }
 
 internal enum AppLanguage

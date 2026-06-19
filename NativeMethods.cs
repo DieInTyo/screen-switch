@@ -8,6 +8,8 @@ internal static class NativeMethods
 {
     internal const long WsExToolWindow = 0x00000080L;
     internal const long WsExLayered = 0x00080000L;
+    internal const long WsPopup = 0x80000000L;
+    internal const long WsCaption = 0x00C00000L;
     internal const uint LwaAlpha = 0x00000002;
     internal const int WmHotKey = 0x0312;
 
@@ -117,13 +119,31 @@ internal static class NativeMethods
         out RECT pvAttribute,
         int cbAttribute);
 
+    [DllImport("dwmapi.dll")]
+    internal static extern int DwmSetWindowAttribute(
+        IntPtr hwnd,
+        int dwAttribute,
+        ref int pvAttribute,
+        int cbAttribute);
+
+    [DllImport("user32.dll")]
+    internal static extern bool ShowScrollBar(IntPtr hWnd, ScrollBarCommand wBar, bool bShow);
+
+    internal const int DwmwaUseImmersiveDarkMode = 20;
+
     internal enum GetWindowCommand : uint
     {
         Owner = 4
     }
 
+    internal enum ScrollBarCommand
+    {
+        Horz = 0
+    }
+
     internal enum WindowLongIndex
     {
+        Style = -16,
         ExStyle = -20
     }
 

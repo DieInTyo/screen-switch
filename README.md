@@ -1,16 +1,20 @@
 # Screen Switch
 
-A small Windows tray app for moving windows between two monitors.
+Screen Switch is a small Windows tray app for moving windows between two monitors.
 
 ## Features
 
-- Left-clicking the tray icon runs the selected action: move the active window or move all windows.
-- A tray menu can move a specific window, or several selected windows at once.
-- Window size and position are preserved relative to the target monitor work area.
-- Normal, maximized, minimized, and browser fullscreen windows are supported.
-- Left-click action, notifications, hotkeys, language, and startup settings are saved between launches.
-- Startup with Windows can be enabled directly from the tray menu.
-- The app warns you if exactly two monitors are not connected.
+- Move the active window, all windows, or selected windows to the other monitor.
+- Use the tray menu or configurable global hotkeys.
+- Open a "Move window" picker with table and tile views, app icons, monitor indicators, window state, multi-select, and double-click moving.
+- Use the compact overlay for quick window moves, drag-to-move between monitor zones, and actions for active/all/minimize.
+- Minimize all visible movable windows.
+- Preserve window size and position relative to the target monitor work area.
+- Handle normal, maximized, minimized, and browser fullscreen windows.
+- Switch between English and Russian UI.
+- Switch between light and dark themes.
+- Configure notifications, startup with Windows, overlay position, overlay opacity, and draggable overlay mode.
+- Warn when exactly two monitors are not connected.
 
 ## Languages
 
@@ -18,7 +22,11 @@ English is the default interface language. Russian is also available from the tr
 
 ## Ready-Made EXE
 
-You can use the ready-made `ScreenSwitch.exe` from the release archive. Download the zip, extract it, and run `ScreenSwitch.exe`.
+You can use the ready-made `ScreenSwitch.exe` from the release archive:
+
+1. Download the release zip.
+2. Extract it anywhere you like.
+3. Run `ScreenSwitch.exe`.
 
 After launch, the app appears in the Windows tray or hidden tray icons area.
 

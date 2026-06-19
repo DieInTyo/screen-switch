@@ -32,6 +32,7 @@ internal sealed class HotkeyManager : NativeWindow, IDisposable
         RegisterIfValid(HotkeyAction.AllWindows, settings.AllWindowsHotkey, usedGestures, failures);
         RegisterIfValid(HotkeyAction.MoveWindow, settings.MoveWindowHotkey, usedGestures, failures);
         RegisterIfValid(HotkeyAction.MinimizeAllWindows, settings.MinimizeAllWindowsHotkey, usedGestures, failures);
+        RegisterIfValid(HotkeyAction.ToggleOverlay, settings.ToggleOverlayHotkey, usedGestures, failures);
         return failures;
     }
 

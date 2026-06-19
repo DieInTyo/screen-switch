@@ -27,6 +27,18 @@ internal static class Program
         try
         {
             ApplicationConfiguration.Initialize();
+            Application.ThreadException += (_, args) => DiagnosticLog.Exception("thread exception", args.Exception);
+            AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+            {
+                if (args.ExceptionObject is Exception exception)
+                {
+                    DiagnosticLog.Exception("unhandled exception", exception);
+                }
+                else
+                {
+                    DiagnosticLog.Info($"unhandled exception object={args.ExceptionObject}");
+                }
+            };
             Application.Run(new TrayAppContext());
         }
         finally
