@@ -12,8 +12,14 @@ internal static class NativeMethods
     internal const long WsCaption = 0x00C00000L;
     internal const uint LwaAlpha = 0x00000002;
     internal const int WmHotKey = 0x0312;
+    internal const int WhKeyboardLl = 13;
+    internal const int WmKeyDown = 0x0100;
+    internal const int WmKeyUp = 0x0101;
+    internal const int WmSysKeyDown = 0x0104;
+    internal const int WmSysKeyUp = 0x0105;
 
     internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    internal delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
     internal static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
@@ -81,6 +87,22 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern IntPtr SetWindowsHookEx(
+        int idHook,
+        LowLevelKeyboardProc lpfn,
+        IntPtr hmod,
+        uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern IntPtr GetModuleHandle(string? lpModuleName);
 
     [DllImport("user32.dll")]
     internal static extern short GetKeyState(int nVirtKey);
@@ -279,5 +301,15 @@ internal static class NativeMethods
         public uint uMsg;
         public ushort wParamL;
         public ushort wParamH;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct KBDLLHOOKSTRUCT
+    {
+        public uint vkCode;
+        public uint scanCode;
+        public uint flags;
+        public uint time;
+        public nuint dwExtraInfo;
     }
 }

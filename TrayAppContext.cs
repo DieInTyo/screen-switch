@@ -60,6 +60,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private TrackedWindow _lastTrackedWindow;
     private MoveWindowPickerForm? _moveWindowPicker;
     private OverlayForm? _overlayForm;
+    private ContextMenuStrip? _overlaySettingsMenu;
     private bool _allowMenuCloseOnce;
 
     public TrayAppContext()
@@ -216,14 +217,8 @@ internal sealed class TrayAppContext : ApplicationContext
         _themeMenu = new ToolStripMenuItem();
         _themeMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(_themeMenu);
         _themeMenu.DropDown.Closing += MenuOnClosing;
-        _lightThemeItem = new ToolStripMenuItem(string.Empty, null, (_, _) => SetTheme(AppTheme.Light))
-        {
-            CheckOnClick = true
-        };
-        _darkThemeItem = new ToolStripMenuItem(string.Empty, null, (_, _) => SetTheme(AppTheme.Dark))
-        {
-            CheckOnClick = true
-        };
+        _lightThemeItem = new ToolStripMenuItem(string.Empty, null, (_, _) => SetTheme(AppTheme.Light));
+        _darkThemeItem = new ToolStripMenuItem(string.Empty, null, (_, _) => SetTheme(AppTheme.Dark));
         _themeMenu.DropDownItems.Add(_lightThemeItem);
         _themeMenu.DropDownItems.Add(_darkThemeItem);
         _menu.Items.Add(_themeMenu);
@@ -231,14 +226,8 @@ internal sealed class TrayAppContext : ApplicationContext
         _languageMenu = new ToolStripMenuItem();
         _languageMenu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(_languageMenu);
         _languageMenu.DropDown.Closing += MenuOnClosing;
-        _englishLanguageItem = new ToolStripMenuItem("English", null, (_, _) => SetLanguage(AppLanguage.English))
-        {
-            CheckOnClick = true
-        };
-        _russianLanguageItem = new ToolStripMenuItem("Русский", null, (_, _) => SetLanguage(AppLanguage.Russian))
-        {
-            CheckOnClick = true
-        };
+        _englishLanguageItem = new ToolStripMenuItem("English", null, (_, _) => SetLanguage(AppLanguage.English));
+        _russianLanguageItem = new ToolStripMenuItem("Русский", null, (_, _) => SetLanguage(AppLanguage.Russian));
         _languageMenu.DropDownItems.Add(_englishLanguageItem);
         _languageMenu.DropDownItems.Add(_russianLanguageItem);
         _menu.Items.Add(_languageMenu);
@@ -580,10 +569,7 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private ToolStripMenuItem CreateOverlayPositionItem(OverlayPosition position)
     {
-        return new ToolStripMenuItem(string.Empty, null, (_, _) => SetOverlayPosition(position))
-        {
-            CheckOnClick = true
-        };
+        return new ToolStripMenuItem(string.Empty, null, (_, _) => SetOverlayPosition(position));
     }
 
     private void ToggleMoveWindowSelection(IntPtr handle, bool selected)
@@ -734,6 +720,11 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         var theme = UiTheme.For(_settings.Theme);
         theme.ApplyToMenu(_menu);
+        if (_overlaySettingsMenu is { IsDisposed: false } settingsMenu)
+        {
+            theme.ApplyToMenu(settingsMenu);
+        }
+
         _overlayForm?.ApplyTheme(theme);
         StyleOpacityTrackBar(_overlayOpacityTrackBar, theme);
 
@@ -791,7 +782,150 @@ internal sealed class TrayAppContext : ApplicationContext
         ApplyUiText();
         ApplyTheme();
         UpdateHotkeyMenuText();
+        _moveWindowPicker?.Close();
+        UpdateOpenOverlaySettingsMenuTextSoon();
         ShowStatus(_text.LanguageChanged);
+    }
+
+    private void UpdateOpenOverlaySettingsMenuTextSoon()
+    {
+        if (_overlaySettingsMenu is not { IsDisposed: false } settingsMenu)
+        {
+            return;
+        }
+
+        _menu.BeginInvoke(new Action(() =>
+        {
+            if (settingsMenu.IsDisposed)
+            {
+                return;
+            }
+
+            UpdateOpenOverlaySettingsMenuText(settingsMenu);
+        }));
+    }
+
+    private void UpdateOpenOverlaySettingsMenuText(ContextMenuStrip settingsMenu)
+    {
+        if (TryGetMenuItem(settingsMenu.Items, 0, out var overlayEnabledItem))
+        {
+            overlayEnabledItem.Text = _text.ShowOverlay;
+            overlayEnabledItem.Checked = _settings.OverlayEnabled;
+        }
+
+        if (TryGetMenuItem(settingsMenu.Items, 1, out var overlayDraggableItem))
+        {
+            overlayDraggableItem.Text = _text.OverlayDraggable;
+            overlayDraggableItem.Checked = _settings.OverlayDraggable;
+        }
+
+        if (TryGetMenuItem(settingsMenu.Items, 2, out var opacityItem))
+        {
+            opacityItem.Text = _text.OverlayOpacityValue(_settings.OverlayOpacity);
+        }
+
+        if (TryGetMenuItem(settingsMenu.Items, 4, out var positionMenu))
+        {
+            positionMenu.Text = _text.OverlayPosition;
+            UpdateRadioItem(positionMenu.DropDownItems, 0, _text.OverlayTopLeft, _settings.OverlayPosition == OverlayPosition.TopLeft);
+            UpdateRadioItem(positionMenu.DropDownItems, 1, _text.OverlayTopRight, _settings.OverlayPosition == OverlayPosition.TopRight);
+            UpdateRadioItem(positionMenu.DropDownItems, 2, _text.OverlayBottomLeft, _settings.OverlayPosition == OverlayPosition.BottomLeft);
+            UpdateRadioItem(positionMenu.DropDownItems, 3, _text.OverlayBottomRight, _settings.OverlayPosition == OverlayPosition.BottomRight);
+        }
+
+        if (TryGetMenuItem(settingsMenu.Items, 5, out var themeMenu))
+        {
+            themeMenu.Text = _text.Theme;
+            UpdateRadioItem(themeMenu.DropDownItems, 0, _text.ThemeLight, _settings.Theme == AppTheme.Light);
+            UpdateRadioItem(themeMenu.DropDownItems, 1, _text.ThemeDark, _settings.Theme == AppTheme.Dark);
+        }
+
+        if (TryGetMenuItem(settingsMenu.Items, 7, out var hotkeysMenu))
+        {
+            hotkeysMenu.Text = _text.Hotkeys;
+            if (TryGetMenuItem(hotkeysMenu.DropDownItems, 0, out var enableHotkeysItem))
+            {
+                enableHotkeysItem.Text = _text.EnableHotkeys;
+                enableHotkeysItem.Checked = _settings.HotkeysEnabled;
+            }
+
+            UpdateNestedHotkeyItem(hotkeysMenu, 2, _text.SelectedMode, _settings.SelectedModeHotkey, HotkeyAction.SelectedMode);
+            UpdateNestedHotkeyItem(hotkeysMenu, 3, _text.ActiveWindow, _settings.ActiveWindowHotkey, HotkeyAction.ActiveWindow);
+            UpdateNestedHotkeyItem(hotkeysMenu, 4, _text.AllWindows, _settings.AllWindowsHotkey, HotkeyAction.AllWindows);
+            UpdateNestedHotkeyItem(hotkeysMenu, 5, _text.MoveWindow, _settings.MoveWindowHotkey, HotkeyAction.MoveWindow);
+            UpdateNestedHotkeyItem(hotkeysMenu, 6, _text.MinimizeAllWindows, _settings.MinimizeAllWindowsHotkey, HotkeyAction.MinimizeAllWindows);
+            UpdateNestedHotkeyItem(hotkeysMenu, 7, _text.Overlay, _settings.ToggleOverlayHotkey, HotkeyAction.ToggleOverlay);
+            if (TryGetMenuItem(hotkeysMenu.DropDownItems, 9, out var resetHotkeysItem))
+            {
+                resetHotkeysItem.Text = _text.ResetHotkeys;
+            }
+        }
+
+        if (TryGetMenuItem(settingsMenu.Items, 8, out var moveMinimizedItem))
+        {
+            moveMinimizedItem.Text = _text.MoveMinimizedWindows;
+            moveMinimizedItem.Checked = _settings.MoveMinimizedWindows;
+        }
+
+        if (TryGetMenuItem(settingsMenu.Items, 9, out var notificationsItem))
+        {
+            notificationsItem.Text = _text.ShowNotifications;
+            notificationsItem.Checked = _settings.ShowNotifications;
+        }
+
+        if (TryGetMenuItem(settingsMenu.Items, 10, out var startupItem))
+        {
+            startupItem.Text = _text.StartWithWindows;
+            startupItem.Checked = _startupManager.IsEnabled();
+        }
+
+        if (TryGetMenuItem(settingsMenu.Items, 11, out var languageMenu))
+        {
+            languageMenu.Text = _text.LanguageMenu;
+            UpdateRadioItem(languageMenu.DropDownItems, 0, "English", _settings.Language == AppLanguage.English);
+            UpdateRadioItem(languageMenu.DropDownItems, 1, "Русский", _settings.Language == AppLanguage.Russian);
+        }
+
+        if (TryGetMenuItem(settingsMenu.Items, 13, out var exitItem))
+        {
+            exitItem.Text = _text.Exit;
+        }
+
+        UiTheme.For(_settings.Theme).ApplyToMenu(settingsMenu);
+    }
+
+    private void UpdateNestedHotkeyItem(
+        ToolStripMenuItem parent,
+        int index,
+        string label,
+        HotkeyGesture? gesture,
+        HotkeyAction action)
+    {
+        if (TryGetMenuItem(parent.DropDownItems, index, out var item))
+        {
+            UpdateHotkeyMenuItem(item, label, gesture, action);
+        }
+    }
+
+    private static void UpdateRadioItem(ToolStripItemCollection items, int index, string text, bool isChecked)
+    {
+        if (TryGetMenuItem(items, index, out var item))
+        {
+            item.Text = text;
+            item.Checked = isChecked;
+        }
+    }
+
+    private static bool TryGetMenuItem(ToolStripItemCollection items, int index, out ToolStripMenuItem item)
+    {
+        if (index >= 0 && index < items.Count && items[index] is ToolStripMenuItem menuItem)
+        {
+            item = menuItem;
+            return true;
+        }
+
+        item = null!;
+        return false;
     }
 
     private void SetOverlayEnabled(bool enabled, bool showStatus)
@@ -900,8 +1034,20 @@ internal sealed class TrayAppContext : ApplicationContext
         settingsMenu.Closed += (_, _) =>
         {
             _allowMenuCloseOnce = false;
+            if (ReferenceEquals(_overlaySettingsMenu, settingsMenu))
+            {
+                _overlaySettingsMenu = null;
+            }
         };
 
+        _overlaySettingsMenu = settingsMenu;
+        PopulateOverlaySettingsMenu(settingsMenu);
+        ShowMenuNearControl(settingsMenu, anchor);
+    }
+
+    private void PopulateOverlaySettingsMenu(ContextMenuStrip settingsMenu)
+    {
+        settingsMenu.Items.Clear();
         var overlayEnabledItem = CreateCheckItem(_text.ShowOverlay, _settings.OverlayEnabled, item => SetOverlayEnabled(item.Checked, showStatus: true));
         var overlayDraggableItem = CreateCheckItem(_text.OverlayDraggable, _settings.OverlayDraggable, item => SetOverlayDraggable(item.Checked));
         var opacityItem = new ToolStripMenuItem(_text.OverlayOpacityValue(_settings.OverlayOpacity))
@@ -948,7 +1094,6 @@ internal sealed class TrayAppContext : ApplicationContext
         }));
 
         UiTheme.For(_settings.Theme).ApplyToMenu(settingsMenu);
-        ShowMenuNearControl(settingsMenu, anchor);
     }
 
     private static void ShowMenuNearControl(ContextMenuStrip menu, Control anchor)
@@ -986,6 +1131,34 @@ internal sealed class TrayAppContext : ApplicationContext
         return item;
     }
 
+    private static ToolStripMenuItem CreateRadioItem(string text, bool isChecked, Action<ToolStripMenuItem> onClick)
+    {
+        var item = new ToolStripMenuItem(text)
+        {
+            Checked = isChecked
+        };
+        item.Click += (_, _) =>
+        {
+            CheckOnlySiblingItems(item);
+            onClick(item);
+        };
+        return item;
+    }
+
+    private static void CheckOnlySiblingItems(ToolStripMenuItem selectedItem)
+    {
+        if (selectedItem.Owner is null)
+        {
+            selectedItem.Checked = true;
+            return;
+        }
+
+        foreach (var item in selectedItem.Owner.Items.OfType<ToolStripMenuItem>())
+        {
+            item.Checked = ReferenceEquals(item, selectedItem);
+        }
+    }
+
     private ToolStripMenuItem CreateOverlayPositionMenu()
     {
         var menu = new ToolStripMenuItem(_text.OverlayPosition);
@@ -1000,11 +1173,7 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private ToolStripMenuItem CreateOverlaySettingsPositionItem(string text, OverlayPosition position)
     {
-        return new ToolStripMenuItem(text, null, (_, _) => SetOverlayPosition(position))
-        {
-            CheckOnClick = true,
-            Checked = _settings.OverlayPosition == position
-        };
+        return CreateRadioItem(text, _settings.OverlayPosition == position, _ => SetOverlayPosition(position));
     }
 
     private ToolStripMenuItem CreateThemeMenu(ContextMenuStrip parentMenu)
@@ -1012,31 +1181,16 @@ internal sealed class TrayAppContext : ApplicationContext
         var menu = new ToolStripMenuItem(_text.Theme);
         menu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(menu);
         menu.DropDown.Closing += MenuOnClosing;
-        var lightItem = new ToolStripMenuItem(_text.ThemeLight)
-        {
-            CheckOnClick = true,
-            Checked = _settings.Theme == AppTheme.Light
-        };
-        var darkItem = new ToolStripMenuItem(_text.ThemeDark)
-        {
-            CheckOnClick = true,
-            Checked = _settings.Theme == AppTheme.Dark
-        };
-
-        lightItem.Click += (_, _) =>
+        var lightItem = CreateRadioItem(_text.ThemeLight, _settings.Theme == AppTheme.Light, _ =>
         {
             SetTheme(AppTheme.Light);
-            lightItem.Checked = true;
-            darkItem.Checked = false;
             UiTheme.For(_settings.Theme).ApplyToMenu(parentMenu);
-        };
-        darkItem.Click += (_, _) =>
+        });
+        var darkItem = CreateRadioItem(_text.ThemeDark, _settings.Theme == AppTheme.Dark, _ =>
         {
             SetTheme(AppTheme.Dark);
-            lightItem.Checked = false;
-            darkItem.Checked = true;
             UiTheme.For(_settings.Theme).ApplyToMenu(parentMenu);
-        };
+        });
 
         menu.DropDownItems.Add(lightItem);
         menu.DropDownItems.Add(darkItem);
@@ -1089,16 +1243,8 @@ internal sealed class TrayAppContext : ApplicationContext
         var menu = new ToolStripMenuItem(_text.LanguageMenu);
         menu.DropDownOpening += (_, _) => ApplyMonitorAwareDropDownDirection(menu);
         menu.DropDown.Closing += MenuOnClosing;
-        menu.DropDownItems.Add(new ToolStripMenuItem("English", null, (_, _) => SetLanguage(AppLanguage.English))
-        {
-            CheckOnClick = true,
-            Checked = _settings.Language == AppLanguage.English
-        });
-        menu.DropDownItems.Add(new ToolStripMenuItem("Русский", null, (_, _) => SetLanguage(AppLanguage.Russian))
-        {
-            CheckOnClick = true,
-            Checked = _settings.Language == AppLanguage.Russian
-        });
+        menu.DropDownItems.Add(CreateRadioItem("English", _settings.Language == AppLanguage.English, _ => SetLanguage(AppLanguage.English)));
+        menu.DropDownItems.Add(CreateRadioItem("Русский", _settings.Language == AppLanguage.Russian, _ => SetLanguage(AppLanguage.Russian)));
         return menu;
     }
 

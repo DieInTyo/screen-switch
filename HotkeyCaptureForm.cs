@@ -7,6 +7,12 @@ internal sealed class HotkeyCaptureForm : Form
 {
     private const int VirtualKeyLeftWin = 0x5B;
     private const int VirtualKeyRightWin = 0x5C;
+    private const int VirtualKeyLeftShift = 0xA0;
+    private const int VirtualKeyRightShift = 0xA1;
+    private const int VirtualKeyLeftControl = 0xA2;
+    private const int VirtualKeyRightControl = 0xA3;
+    private const int VirtualKeyLeftAlt = 0xA4;
+    private const int VirtualKeyRightAlt = 0xA5;
     private readonly LocalizedStrings _text;
     private readonly UiTheme _theme;
     private readonly Label _hintLabel;
@@ -95,10 +101,14 @@ internal sealed class HotkeyCaptureForm : Form
 
         var gesture = new HotkeyGesture
         {
-            Control = e.Control,
-            Alt = e.Alt,
-            Shift = e.Shift,
-            Win = IsWinKeyDown(),
+            Control = IsKeyDown(VirtualKeyLeftControl) || IsKeyDown(VirtualKeyRightControl),
+            Alt = IsKeyDown(VirtualKeyLeftAlt) || IsKeyDown(VirtualKeyRightAlt),
+            Shift = IsKeyDown(VirtualKeyLeftShift) || IsKeyDown(VirtualKeyRightShift),
+            Win = IsKeyDown(VirtualKeyLeftWin) || IsKeyDown(VirtualKeyRightWin),
+            ControlSide = GetModifierSide(VirtualKeyLeftControl, VirtualKeyRightControl),
+            AltSide = GetModifierSide(VirtualKeyLeftAlt, VirtualKeyRightAlt),
+            ShiftSide = GetModifierSide(VirtualKeyLeftShift, VirtualKeyRightShift),
+            WinSide = GetModifierSide(VirtualKeyLeftWin, VirtualKeyRightWin),
             Key = e.KeyCode
         };
 
@@ -134,8 +144,24 @@ internal sealed class HotkeyCaptureForm : Form
 
     private static bool IsWinKeyDown()
     {
-        return (NativeMethods.GetKeyState(VirtualKeyLeftWin) & 0x8000) != 0
-            || (NativeMethods.GetKeyState(VirtualKeyRightWin) & 0x8000) != 0;
+        return IsKeyDown(VirtualKeyLeftWin) || IsKeyDown(VirtualKeyRightWin);
+    }
+
+    private static bool IsKeyDown(int virtualKey)
+    {
+        return (NativeMethods.GetKeyState(virtualKey) & 0x8000) != 0;
+    }
+
+    private static ModifierKeySide GetModifierSide(int leftVirtualKey, int rightVirtualKey)
+    {
+        var leftDown = IsKeyDown(leftVirtualKey);
+        var rightDown = IsKeyDown(rightVirtualKey);
+        return (leftDown, rightDown) switch
+        {
+            (true, false) => ModifierKeySide.Left,
+            (false, true) => ModifierKeySide.Right,
+            _ => ModifierKeySide.Any
+        };
     }
 
     private static string FormatGesture(HotkeyGesture? gesture, LocalizedStrings text)

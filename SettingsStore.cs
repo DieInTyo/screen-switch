@@ -122,12 +122,23 @@ internal enum AppLanguage
     Russian = 1
 }
 
+internal enum ModifierKeySide
+{
+    Any = 0,
+    Left = 1,
+    Right = 2
+}
+
 internal sealed class HotkeyGesture
 {
     public bool Control { get; set; }
     public bool Alt { get; set; }
     public bool Shift { get; set; }
     public bool Win { get; set; }
+    public ModifierKeySide ControlSide { get; set; } = ModifierKeySide.Any;
+    public ModifierKeySide AltSide { get; set; } = ModifierKeySide.Any;
+    public ModifierKeySide ShiftSide { get; set; } = ModifierKeySide.Any;
+    public ModifierKeySide WinSide { get; set; } = ModifierKeySide.Any;
     public Keys Key { get; set; }
 
     public bool IsValid()
@@ -179,22 +190,22 @@ internal sealed class HotkeyGesture
         var parts = new List<string>();
         if (Control)
         {
-            parts.Add("Ctrl");
+            parts.Add(FormatModifier("Ctrl", ControlSide));
         }
 
         if (Alt)
         {
-            parts.Add("Alt");
+            parts.Add(FormatModifier("Alt", AltSide));
         }
 
         if (Shift)
         {
-            parts.Add("Shift");
+            parts.Add(FormatModifier("Shift", ShiftSide));
         }
 
         if (Win)
         {
-            parts.Add("Win");
+            parts.Add(FormatModifier("Win", WinSide));
         }
 
         parts.Add(FormatKey(Key));
@@ -209,8 +220,21 @@ internal sealed class HotkeyGesture
             Alt = Alt,
             Shift = Shift,
             Win = Win,
+            ControlSide = ControlSide,
+            AltSide = AltSide,
+            ShiftSide = ShiftSide,
+            WinSide = WinSide,
             Key = Key
         };
+    }
+
+    public bool ConflictsWith(HotkeyGesture other)
+    {
+        return Key == other.Key
+            && ModifierConflicts(Control, ControlSide, other.Control, other.ControlSide)
+            && ModifierConflicts(Alt, AltSide, other.Alt, other.AltSide)
+            && ModifierConflicts(Shift, ShiftSide, other.Shift, other.ShiftSide)
+            && ModifierConflicts(Win, WinSide, other.Win, other.WinSide);
     }
 
     internal static bool IsModifierKey(Keys key)
@@ -260,5 +284,36 @@ internal sealed class HotkeyGesture
             Keys.OemQuestion => "/",
             _ => key.ToString()
         };
+    }
+
+    private static string FormatModifier(string name, ModifierKeySide side)
+    {
+        return side switch
+        {
+            ModifierKeySide.Left => $"Left {name}",
+            ModifierKeySide.Right => $"Right {name}",
+            _ => name
+        };
+    }
+
+    private static bool ModifierConflicts(
+        bool firstEnabled,
+        ModifierKeySide firstSide,
+        bool secondEnabled,
+        ModifierKeySide secondSide)
+    {
+        if (firstEnabled != secondEnabled)
+        {
+            return false;
+        }
+
+        if (!firstEnabled)
+        {
+            return true;
+        }
+
+        return firstSide == ModifierKeySide.Any
+            || secondSide == ModifierKeySide.Any
+            || firstSide == secondSide;
     }
 }

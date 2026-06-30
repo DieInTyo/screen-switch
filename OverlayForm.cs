@@ -53,6 +53,7 @@ internal sealed class OverlayForm : Form
     private readonly Dictionary<string, Image> _iconCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<IntPtr, TileState> _tiles = new();
     private readonly Dictionary<string, Control> _moreTiles = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, MovableWindowInfo[]> _overflowWindows = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _appWindowCounts = new(StringComparer.CurrentCultureIgnoreCase);
     private readonly HashSet<IntPtr> _selectedHandles = new();
     private readonly System.Windows.Forms.Timer _refreshTimer;
@@ -69,6 +70,7 @@ internal sealed class OverlayForm : Form
     private Point _dragStartLocation;
     private TileState? _pendingTileDrag;
     private Point _pendingTileDragStart;
+    private OverflowIconPopup? _overflowIconPopup;
 
     public OverlayForm(
         WindowMover windowMover,
@@ -271,6 +273,7 @@ internal sealed class OverlayForm : Form
             ClearZone(_rightZone);
             _tiles.Clear();
             _moreTiles.Clear();
+            _overflowWindows.Clear();
             _appWindowCounts.Clear();
             _emptyLabel = null;
         }
@@ -307,7 +310,6 @@ internal sealed class OverlayForm : Form
     {
         _text = text;
         ApplyText();
-        RefreshTiles(forceRebuild: true);
     }
 
     public void ApplyTheme(UiTheme theme)
@@ -383,6 +385,7 @@ internal sealed class OverlayForm : Form
         {
             _refreshTimer.Stop();
             _refreshTimer.Dispose();
+            _overflowIconPopup?.Dispose();
             foreach (var image in _iconCache.Values)
             {
                 image.Dispose();
@@ -397,7 +400,6 @@ internal sealed class OverlayForm : Form
     private void ApplyText()
     {
         Text = _text.Overlay;
-        _moveSelectedButton.Direction = MoveDirection.Both;
         _activeButton.Text = _text.OverlayActiveButton;
         _allButton.Text = _text.OverlayAllButton;
         _minimizeButton.Text = _text.OverlayMinimizeButton;
@@ -409,6 +411,20 @@ internal sealed class OverlayForm : Form
         _toolTip.SetToolTip(_hideButton, _text.OverlayHide);
         _toolTip.SetToolTip(_leftBadge, "1");
         _toolTip.SetToolTip(_rightBadge, "2");
+        foreach (var state in _tiles.Values)
+        {
+            UpdateTileTooltip(state);
+        }
+
+        foreach (var moreTile in _moreTiles.Values)
+        {
+            _toolTip.SetToolTip(moreTile, string.Empty);
+        }
+
+        if (_emptyLabel is not null)
+        {
+            _emptyLabel.Text = _text.OverlayNoWindows;
+        }
     }
 
     private MovableWindowInfo[] GetVisibleOverlayWindows(
@@ -470,12 +486,20 @@ internal sealed class OverlayForm : Form
         }
 
         var total = allWindows.Count(window => window.ScreenDeviceName == deviceName);
-        var visible = visibleWindows.Count(window => window.ScreenDeviceName == deviceName);
+        var visibleHandles = visibleWindows
+            .Where(window => window.ScreenDeviceName == deviceName)
+            .Select(window => window.Handle)
+            .ToHashSet();
+        var visible = visibleHandles.Count;
         if (total <= visible)
         {
             RemoveMoreTile(deviceName);
             return;
         }
+
+        _overflowWindows[deviceName] = allWindows
+            .Where(window => window.ScreenDeviceName == deviceName && !visibleHandles.Contains(window.Handle))
+            .ToArray();
 
         if (!_moreTiles.TryGetValue(deviceName, out var moreTile))
         {
@@ -483,6 +507,7 @@ internal sealed class OverlayForm : Form
             _moreTiles[deviceName] = moreTile;
         }
 
+        moreTile.Tag = deviceName;
         if (!zone.TilePanel.Controls.Contains(moreTile))
         {
             moreTile.Parent?.Controls.Remove(moreTile);
@@ -501,6 +526,7 @@ internal sealed class OverlayForm : Form
 
         moreTile.Parent?.Controls.Remove(moreTile);
         moreTile.Dispose();
+        _overflowWindows.Remove(deviceName);
     }
 
     private void UpdateEmptyLabel(bool shouldShow)
@@ -609,9 +635,6 @@ internal sealed class OverlayForm : Form
 
     private void UpdateWindowTile(TileState state, MovableWindowInfo window)
     {
-        var tooltip = _appWindowCounts.TryGetValue(window.AppName, out var appCount) && appCount <= 1
-            ? window.AppName
-            : _text.OverlayWindowTooltip(window.AppName, window.Title);
         var iconKey = string.IsNullOrWhiteSpace(window.ProcessPath) ? window.AppName : window.ProcessPath;
         var changed = false;
 
@@ -662,14 +685,25 @@ internal sealed class OverlayForm : Form
             changed = true;
         }
 
-        if (!string.Equals(state.Tooltip, tooltip, StringComparison.CurrentCulture))
-        {
-            state.Tooltip = tooltip;
-            _toolTip.SetToolTip(state.Tile, tooltip);
-            _toolTip.SetToolTip(state.Icon, tooltip);
-        }
+        UpdateTileTooltip(state);
 
         UpdateTileVisual(state, force: changed);
+    }
+
+    private void UpdateTileTooltip(TileState state)
+    {
+        var window = state.Window;
+        var tooltip = _appWindowCounts.TryGetValue(window.AppName, out var appCount) && appCount <= 1
+            ? window.AppName
+            : _text.OverlayWindowTooltip(window.AppName, window.Title);
+        if (string.Equals(state.Tooltip, tooltip, StringComparison.CurrentCulture))
+        {
+            return;
+        }
+
+        state.Tooltip = tooltip;
+        _toolTip.SetToolTip(state.Tile, tooltip);
+        _toolTip.SetToolTip(state.Icon, tooltip);
     }
 
     private void UpdateTileVisual(TileState state, bool force = false)
@@ -724,9 +758,30 @@ internal sealed class OverlayForm : Form
             Text = "..."
         };
         StyleActionButton(tile);
-        _toolTip.SetToolTip(tile, _text.OverlayMore);
+        _toolTip.SetToolTip(tile, string.Empty);
+        tile.MouseEnter += (_, _) => ShowOverflowIconPopup(tile);
+        tile.MouseLeave += (_, _) => HideOverflowIconPopup();
         tile.Click += (_, _) => _openWindowPicker();
         return tile;
+    }
+
+    private void ShowOverflowIconPopup(Control anchor)
+    {
+        if (anchor.Tag is not string deviceName
+            || !_overflowWindows.TryGetValue(deviceName, out var windows)
+            || windows.Length == 0)
+        {
+            HideOverflowIconPopup();
+            return;
+        }
+
+        _overflowIconPopup ??= new OverflowIconPopup();
+        _overflowIconPopup.Show(anchor, windows, _theme, GetTileIcon);
+    }
+
+    private void HideOverflowIconPopup()
+    {
+        _overflowIconPopup?.Hide();
     }
 
     private MoveDirectionButton CreateCenterMoveButton()
@@ -1222,6 +1277,109 @@ internal sealed class OverlayForm : Form
                 ClientRectangle,
                 Color.White,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+    }
+
+    private sealed class OverflowIconPopup : Form
+    {
+        private const int PopupIconSize = 22;
+        private const int PopupGap = 4;
+        private const int WsExNoActivate = 0x08000000;
+        private readonly FlowLayoutPanel _panel = new();
+        private UiTheme _theme = UiTheme.For(AppTheme.Light);
+
+        public OverflowIconPopup()
+        {
+            AutoScaleMode = AutoScaleMode.Dpi;
+            DoubleBuffered = true;
+            FormBorderStyle = FormBorderStyle.None;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            TopMost = true;
+
+            _panel.AutoSize = true;
+            _panel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            _panel.Dock = DockStyle.Fill;
+            _panel.Margin = Padding.Empty;
+            _panel.Padding = new Padding(PopupGap);
+            _panel.WrapContents = true;
+            Controls.Add(_panel);
+        }
+
+        protected override bool ShowWithoutActivation => true;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var createParams = base.CreateParams;
+                createParams.ExStyle |= WsExNoActivate;
+                return createParams;
+            }
+        }
+
+        public void Show(
+            Control anchor,
+            IReadOnlyCollection<MovableWindowInfo> windows,
+            UiTheme theme,
+            Func<MovableWindowInfo, Image> getIcon)
+        {
+            _theme = theme;
+            BackColor = theme.Surface;
+            _panel.BackColor = theme.Surface;
+            _panel.SuspendLayout();
+            foreach (Control control in _panel.Controls)
+            {
+                control.Dispose();
+            }
+
+            _panel.Controls.Clear();
+
+            foreach (var window in windows.Take(12))
+            {
+                var icon = new PictureBox
+                {
+                    BackColor = theme.Surface,
+                    Image = getIcon(window),
+                    Margin = new Padding(2),
+                    Size = new Size(PopupIconSize, PopupIconSize),
+                    SizeMode = PictureBoxSizeMode.StretchImage
+                };
+                _panel.Controls.Add(icon);
+            }
+
+            _panel.ResumeLayout();
+            var columns = Math.Min(6, Math.Max(1, _panel.Controls.Count));
+            var rows = (int)Math.Ceiling(_panel.Controls.Count / (double)columns);
+            Size = new Size(
+                PopupGap * 2 + columns * (PopupIconSize + 4),
+                PopupGap * 2 + rows * (PopupIconSize + 4));
+            Location = GetPopupLocation(anchor, Size);
+            base.Show(anchor.FindForm());
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            using var pen = new Pen(_theme.Border);
+            e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+        }
+
+        private static Point GetPopupLocation(Control anchor, Size size)
+        {
+            var area = Screen.FromControl(anchor).WorkingArea;
+            const int gap = 5;
+            var location = anchor.PointToScreen(new Point(0, -size.Height - gap));
+            if (location.Y < area.Top)
+            {
+                location = anchor.PointToScreen(new Point(0, anchor.Height + gap));
+            }
+
+            var x = Math.Clamp(location.X, area.Left, Math.Max(area.Left, area.Right - size.Width));
+            var y = Math.Clamp(location.Y, area.Top, Math.Max(area.Top, area.Bottom - size.Height));
+            return new Point(x, y);
         }
     }
 
